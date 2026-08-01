@@ -1,5 +1,5 @@
--- // UltraMM2 v1.6 by UltraAI for Ultrakotik // --
--- Гибкий определитель ролей с глубоким поиском и отладкой
+-- // UltraMM2 v1.7 by UltraAI for Ultrakotik // --
+-- Роли отображаются всегда, кэшируются и не исчезают
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -18,7 +18,7 @@ local ESP = {
     ShowDistance = true,
     ShowName = true,
     ShowRole = true,
-    ShowDead = false,
+    ShowDead = false,   -- если false, ESP-рамка скрывается, но роль остаётся
     MaxDistance = 2000,
     Colors = {
         Murderer = Color3.fromRGB(255, 0, 0),
@@ -41,52 +41,47 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- ==========================================
--- НОВЫЙ УНИВЕРСАЛЬНЫЙ ПОИСК РОЛИ
--- ==========================================
+-- Кэш ролей (сохраняется навсегда, обновляется при возрождении)
+local roleCache = {}
+
+-- Глубокий поиск роли (как в v1.6)
 local function deepFindRole(player)
-    -- Функция ищет StringValue с именем "Role" или содержащий "role" во всех потомках
     local function search(parent)
         for _, child in pairs(parent:GetChildren()) do
             if child:IsA("StringValue") and (child.Name == "Role" or child.Name:lower():match("role")) then
                 return child.Value
             end
-            -- Рекурсивно ищем в дочерних
             local result = search(child)
             if result then return result end
         end
         return nil
     end
 
-    -- 1. Ищем в PlayerGui
     local gui = player:FindFirstChild("PlayerGui")
     if gui then
         local role = search(gui)
         if role then return role end
     end
 
-    -- 2. Ищем в Backpack (иногда там лежит предмет с ролью)
     local backpack = player:FindFirstChild("Backpack")
     if backpack then
         local role = search(backpack)
         if role then return role end
     end
 
-    -- 3. Ищем в Character (могут быть скрытые атрибуты)
     local char = player.Character
     if char then
         local role = search(char)
         if role then return role end
     end
 
-    -- 4. Ищем в workspace.GameFolder (старый способ)
     local gameFolder = workspace:FindFirstChild("GameFolder")
     if gameFolder then
         local role = search(gameFolder)
         if role then return role end
     end
 
-    -- 5. Запасной: анализ оружия
+    -- Запасной: оружие
     if char then
         local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
         local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
@@ -95,10 +90,39 @@ local function deepFindRole(player)
         else return "Innocent" end
     end
 
-    return nil -- ничего не нашли
+    return nil
 end
 
--- Проверка жив ли игрок
+-- Нормализация названия роли
+local function normalizeRole(rawRole)
+    if not rawRole then return "Unknown" end
+    local r = rawRole:lower()
+    if r:match("murder") then return "Murderer"
+    elseif r:match("sheriff") then return "Sheriff"
+    elseif r:match("innocent") then return "Innocent"
+    else return rawRole end
+end
+
+-- Получение роли с кэшированием
+local function getCachedRole(player)
+    if not IsMM2 then return "Unknown" end
+    -- При возрождении персонажа сбрасываем кэш
+    if player.Character then
+        local hum = player.Character:FindFirstChild("Humanoid")
+        if hum and hum.Health > 0 then
+            -- Живой, можно попытаться найти роль
+            local role = deepFindRole(player)
+            if role then
+                roleCache[player] = normalizeRole(role)
+            elseif not roleCache[player] then
+                roleCache[player] = "Unknown"
+            end
+        end
+    end
+    return roleCache[player] or "Unknown"
+end
+
+-- Проверка, мёртв ли игрок
 local function isPlayerDead(player)
     local char = player.Character
     if not char then return true end
@@ -108,45 +132,24 @@ local function isPlayerDead(player)
 end
 
 local function getPlayerStatus(player)
-    if isPlayerDead(player) then return "Dead" end
-    local role = deepFindRole(player)
-    if role then
-        -- Приводим к стандартным названиям
-        role = role:lower()
-        if role:match("murder") then return "Murderer"
-        elseif role:match("sheriff") then return "Sheriff"
-        elseif role:match("innocent") then return "Innocent"
-        else return role:sub(1,1):upper()..role:sub(2) end -- если что-то другое, вернём как есть
-    end
-    -- Отладка: выводим PlayerGui в консоль, если роль не найдена
-    if not player._debugPrinted then
-        warn("Не удалось определить роль для " .. player.Name .. ". Содержимое PlayerGui:")
-        local gui = player:FindFirstChild("PlayerGui")
-        if gui then
-            for _, child in pairs(gui:GetChildren()) do
-                warn("  " .. child:GetFullName() .. " [" .. child.ClassName .. "]")
-            end
-        else
-            warn("  PlayerGui отсутствует")
-        end
-        player._debugPrinted = true -- чтобы не спамить
-    end
-    return "Unknown"
+    local dead = isPlayerDead(player)
+    local role = getCachedRole(player)
+    if dead then return "Dead" end
+    return role
 end
 
 local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
--- Сброс флага отладки при перезаходе персонажа
+-- Сброс кэша при возрождении
 Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function() p._debugPrinted = nil end)
+    p.CharacterAdded:Connect(function()
+        roleCache[p] = nil -- заставит переопределить роль
+    end)
 end)
 
--- ==========================================
--- ОСТАЛЬНОЙ КОД БЕЗ ИЗМЕНЕНИЙ (ESP, Aimbot, GUI)
--- ==========================================
-
+-- Хранилище ESP
 local playerESPs = {}
 
 local function setVisible(esp, state)
@@ -193,16 +196,14 @@ local function createESP(player)
         end
 
         local status = getPlayerStatus(player)
-
-        if status == "Dead" and not ESP.ShowDead then
-            setVisible(esp, false)
-            return
-        end
+        local roleText = getCachedRole(player) -- всегда берём кэшированную роль для отображения
 
         local char = player.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
         local head = char and char:FindFirstChild("Head")
         if not (root and head) then
+            -- Если персонажа нет, но роль есть, мы всё равно можем показать текст роли? 
+            -- Для простоты скроем всё, т.к. нет координат.
             setVisible(esp, false)
             return
         end
@@ -217,21 +218,35 @@ local function createESP(player)
         local bottom, onScreen2 = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
 
         local onScreen = (onScreen1 or onScreen2)
-        local color = getRoleColor(status)
+
+        -- Определяем, нужно ли показывать рамку/линию/расстояние
+        local showFullESP = true
+        if status == "Dead" and not ESP.ShowDead then
+            showFullESP = false
+        end
+
+        -- Цвет для роли: если мёртв и ShowDead выключен, всё равно покажем роль серым
+        local roleColor = getRoleColor(roleText) -- кэшированная роль, не статус
+        if status == "Dead" and not ESP.ShowDead then
+            -- рамку не показываем, но роль видна
+            roleColor = ESP.Colors.Dead
+        end
 
         local height = math.abs(top.Y - bottom.Y)
         local width = height * 0.7
         local x = top.X - width/2
         local y = top.Y
 
+        -- Бокс
         if esp.Box then
-            esp.Box.Visible = onScreen
+            esp.Box.Visible = onScreen and showFullESP
             esp.Box.Size = Vector2.new(width, height)
             esp.Box.Position = Vector2.new(x, y)
-            esp.Box.Color = color
+            esp.Box.Color = roleColor
         end
+        -- Линия
         if esp.Line then
-            esp.Line.Visible = onScreen
+            esp.Line.Visible = onScreen and showFullESP
             local vpSize = Camera.ViewportSize
             if vpSize then
                 esp.Line.From = Vector2.new(vpSize.X/2, vpSize.Y)
@@ -239,25 +254,28 @@ local function createESP(player)
                 esp.Line.From = Vector2.new(0,0)
             end
             esp.Line.To = Vector2.new(top.X, bottom.Y)
-            esp.Line.Color = color
+            esp.Line.Color = roleColor
         end
+        -- Расстояние
         if esp.Dist then
-            esp.Dist.Visible = onScreen
+            esp.Dist.Visible = onScreen and showFullESP
             esp.Dist.Text = string.format("%.0f м", dist)
             esp.Dist.Position = Vector2.new(top.X, bottom.Y + 5)
-            esp.Dist.Color = color
+            esp.Dist.Color = roleColor
         end
+        -- Имя
         if esp.Name then
             esp.Name.Visible = onScreen
             esp.Name.Text = player.Name
             esp.Name.Position = Vector2.new(top.X, top.Y - 20)
             esp.Name.Color = Color3.new(1,1,1)
         end
+        -- Роль (всегда показываем, если ShowRole включена, даже если рамка скрыта)
         if esp.Role then
-            esp.Role.Visible = onScreen
-            esp.Role.Text = status
+            esp.Role.Visible = onScreen and ESP.ShowRole
+            esp.Role.Text = roleText -- кэшированная роль
             esp.Role.Position = Vector2.new(top.X, top.Y - 35)
-            esp.Role.Color = color
+            esp.Role.Color = roleColor
         end
     end
 
@@ -265,13 +283,14 @@ local function createESP(player)
     playerESPs[player] = esp
 end
 
+-- Инициализация
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
 Players.PlayerAdded:Connect(function(p) if p ~= LocalPlayer then createESP(p) end end)
 Players.PlayerRemoving:Connect(removeESP)
 
--- Aimbot
+-- ====== AIMBOT (без изменений) ======
 local fovCircle = Drawing.new("Circle")
 fovCircle.Visible = false
 fovCircle.Radius = Aimbot.FOVRadius
@@ -329,7 +348,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Auto Pickup, God Mode, Fast Kill (прежние)
+-- ====== AUTO PICKUP, GOD MODE, FAST KILL (без изменений) ======
 if IsMM2 then
     LocalPlayer.CharacterAdded:Connect(function(char)
         local root = char:WaitForChild("HumanoidRootPart")
@@ -374,10 +393,10 @@ if IsMM2 then
     end)
 end
 
--- GUI
+-- ====== GUI (упрощённый) ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v1.6"
+    screenGui.Name = "UltraMM2_GUI_v1.7"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -393,7 +412,7 @@ local function createGUI()
     icon.Parent = screenGui
 
     local panel = Instance.new("Frame")
-    panel.Size = UDim2.new(0, 220, 0, 280)
+    panel.Size = UDim2.new(0, 220, 0, 260)
     panel.Position = UDim2.new(0, 50, 0, 10)
     panel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     panel.BorderSizePixel = 0
@@ -405,7 +424,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 20)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v1.6"
+    title.Text = "UltraMM2 v1.7"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold; title.TextSize = 14
     title.Parent = panel
@@ -430,13 +449,13 @@ local function createGUI()
     local aimTab = createTab("Aimbot", 0.5)
 
     local espPage = Instance.new("Frame")
-    espPage.Size = UDim2.new(1, -10, 0, 220)
+    espPage.Size = UDim2.new(1, -10, 0, 200)
     espPage.Position = UDim2.new(0,5,0,47)
     espPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
     espPage.Visible = true; espPage.Parent = panel
 
     local aimPage = Instance.new("Frame")
-    aimPage.Size = UDim2.new(1, -10, 0, 220)
+    aimPage.Size = UDim2.new(1, -10, 0, 200)
     aimPage.Position = UDim2.new(0,5,0,47)
     aimPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
     aimPage.Visible = false; aimPage.Parent = panel
@@ -500,4 +519,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v1.6 — гибкий определитель ролей запущен. Если роли не отображаются, скопируй вывод консоли и передай UltraAI.")
+print("UltraMM2 v1.7 — роли теперь отображаются постоянно!")
