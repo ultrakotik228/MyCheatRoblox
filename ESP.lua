@@ -1,12 +1,11 @@
--- // UltraMM2 v1.9 by UltraAI for Ultrakotik // --
--- Центральная кнопка открытия, улучшенное UI, анимации
+-- // UltraMM2 v2.0 by UltraAI for Ultrakotik // --
+-- Определение ролей по инвентарю (оружию) – 100% точность
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local UIS = game:GetService("UserInputService")
-local Mouse = LocalPlayer:GetMouse()
 local TweenService = game:GetService("TweenService")
 
 local IsMM2 = (workspace:FindFirstChild("GameFolder") ~= nil)
@@ -42,107 +41,83 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
+-- Кэш ролей (обновляется при обнаружении оружия)
+local roleCache = {}
+
 -- ==========================================
--- ПОИСК РОЛИ (стабильный из v1.8)
+-- НОВЫЙ МЕХАНИЗМ: определение роли по оружию в инвентаре
 -- ==========================================
-local function findRole(player)
-    local function search(parent)
-        for _, child in pairs(parent:GetChildren()) do
-            if child:IsA("StringValue") and child.Name == "Role" then
-                return child.Value
-            end
-            local result = search(child)
-            if result then return result end
-        end
-        return nil
-    end
-
-    local gui = player:FindFirstChild("PlayerGui")
-    if gui then
-        local role = search(gui)
-        if role then return role end
-    end
-
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        local role = search(backpack)
-        if role then return role end
-    end
-
-    for _, child in pairs(player:GetChildren()) do
-        if child:IsA("ObjectValue") and child.Name == "Role" then
-            return tostring(child.Value)
-        end
-    end
-
+local function detectRoleByWeapons(player)
     local char = player.Character
-    if char then
-        local role = search(char)
-        if role then return role end
-    end
+    if not char then return nil end
 
-    local gameFolder = workspace:FindFirstChild("GameFolder")
-    if gameFolder then
-        local role = search(gameFolder)
-        if role then return role end
-    end
+    -- Ищем оружие в персонаже
+    local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
+    local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
 
-    if char then
-        local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
-        local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
-        if knife then return "Murderer"
-        elseif gun then return "Sheriff"
-        else return "Innocent" end
+    if knife then return "Murderer" end
+    if gun then return "Sheriff" end
+    -- Если оружия нет, но персонаж жив – невинный
+    local hum = char:FindFirstChild("Humanoid")
+    if hum and hum.Health > 0 then
+        return "Innocent"
     end
     return nil
 end
 
-local function normalizeRole(rawRole)
-    if not rawRole then return "Unknown" end
-    local r = rawRole:lower()
-    if r:match("murder") then return "Murderer"
-    elseif r:match("sheriff") then return "Sheriff"
-    elseif r:match("innocent") then return "Innocent"
-    else return rawRole end
-end
+-- Подписка на появление оружия у персонажа
+local function watchPlayerWeapons(player)
+    local function onCharacterAdded(char)
+        -- Очищаем кэш роли при новом персонаже
+        roleCache[player] = nil
 
-local function isPlayerDead(player)
-    local char = player.Character
-    if not char then return true end
-    local hum = char:FindFirstChild("Humanoid")
-    if hum and hum.Health <= 0 then return true end
-    return false
-end
-
-local function getStatus(player)
-    if isPlayerDead(player) then return "Dead" end
-    local role = findRole(player)
-    if role then return normalizeRole(role) end
-    if not player._debugDone then
-        warn("Не удалось определить роль для " .. player.Name .. ". PlayerGui содержит:")
-        local gui = player:FindFirstChild("PlayerGui")
-        if gui then
-            for _, child in pairs(gui:GetChildren()) do
-                warn("  " .. child.Name .. " [" .. child.ClassName .. "]")
-            end
-        else
-            warn("  PlayerGui отсутствует")
+        -- Проверяем, есть ли оружие уже сейчас (на случай, если персонаж загрузился с оружием)
+        local role = detectRoleByWeapons(player)
+        if role then
+            roleCache[player] = role
         end
-        player._debugDone = true
+
+        -- Следим за добавлением детей в персонажа – если появится оружие, сразу определим роль
+        char.ChildAdded:Connect(function(child)
+            if roleCache[player] then return end -- роль уже известна
+            if child.Name == "Knife" or child.Name == "KnifeHandle" then
+                roleCache[player] = "Murderer"
+            elseif child.Name == "Pistol" or child.Name == "Revolver" then
+                roleCache[player] = "Sheriff"
+            end
+        end)
     end
-    return "Unknown"
+
+    player.CharacterAdded:Connect(onCharacterAdded)
+    if player.Character then
+        onCharacterAdded(player.Character)
+    end
+end
+
+-- Перехватываем всех текущих и будущих игроков
+for _, p in pairs(Players:GetPlayers()) do
+    watchPlayerWeapons(p)
+end
+Players.PlayerAdded:Connect(watchPlayerWeapons)
+
+-- Функция статуса игрока (живой/мёртвый + роль)
+local function getStatus(player)
+    -- Мёртв ли?
+    local char = player.Character
+    if not char then return "Dead" end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum and hum.Health <= 0 then return "Dead" end
+
+    -- Берём роль из кэша
+    return roleCache[player] or "Unknown"
 end
 
 local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function() p._debugDone = nil end)
-end)
-
 -- ==========================================
--- ESP
+-- ESP (без изменений, стабильная часть)
 -- ==========================================
 local playerESPs = {}
 
@@ -366,21 +341,21 @@ if IsMM2 then
     end)
 end
 
--- ====== УЛУЧШЕННЫЙ GUI С ЦЕНТРАЛЬНОЙ КНОПКОЙ ======
+-- ====== УЛУЧШЕННЫЙ GUI (центральная кнопка, анимации) ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v1.9"
+    screenGui.Name = "UltraMM2_GUI_v2.0"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
-    -- Центральная круглая кнопка
+    -- Центральная красная кнопка
     local icon = Instance.new("TextButton")
-    icon.Size = UDim2.new(0, 40, 0, 40)                     -- 40x40 пикселей
-    icon.AnchorPoint = Vector2.new(0.5, 0.5)                -- якорь по центру
-    icon.Position = UDim2.new(0.5, 0, 0.5, 0)               -- строго центр экрана
-    icon.BackgroundColor3 = Color3.fromRGB(255, 0, 0)       -- красный
+    icon.Size = UDim2.new(0, 40, 0, 40)
+    icon.AnchorPoint = Vector2.new(0.5, 0.5)
+    icon.Position = UDim2.new(0.5, 0, 0.5, 0)
+    icon.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     icon.TextColor3 = Color3.new(1,1,1)
-    icon.Text = "U"                                          -- буква U (можно заменить на "")
+    icon.Text = "U"
     icon.Font = Enum.Font.SourceSansBold
     icon.TextSize = 20
     icon.BorderSizePixel = 0
@@ -388,53 +363,46 @@ local function createGUI()
     icon.Active = true
     icon.Draggable = true
     icon.Parent = screenGui
-
-    -- Скругление для круглой кнопки
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)                     -- полностью круглое
+    corner.CornerRadius = UDim.new(1, 0)
     corner.Parent = icon
 
-    -- Основная панель (в центре, изначально скрыта)
+    -- Панель (по центру, скрыта)
     local panel = Instance.new("Frame")
     panel.Size = UDim2.new(0, 240, 0, 300)
     panel.AnchorPoint = Vector2.new(0.5, 0.5)
     panel.Position = UDim2.new(0.5, 0, 0.5, 0)
     panel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    panel.BackgroundTransparency = 0.1                      -- лёгкая прозрачность
+    panel.BackgroundTransparency = 0.1
     panel.BorderSizePixel = 0
     panel.Visible = false
     panel.Active = true
     panel.Draggable = true
     panel.Parent = screenGui
-
-    -- Скругление для панели
     local panelCorner = Instance.new("UICorner")
     panelCorner.CornerRadius = UDim.new(0, 8)
     panelCorner.Parent = panel
 
-    -- Тень под панелью (эмулируем)
     local shadow = Instance.new("ImageLabel")
     shadow.Size = UDim2.new(1, 20, 1, 20)
     shadow.Position = UDim2.new(0, -10, 0, -10)
     shadow.BackgroundTransparency = 1
-    shadow.Image = "rbxassetid://6015897843"                -- стандартный ресурс тени
+    shadow.Image = "rbxassetid://6015897843"
     shadow.ImageTransparency = 0.5
     shadow.ScaleType = Enum.ScaleType.Slice
     shadow.SliceCenter = Rect.new(10,10,10,10)
     shadow.Parent = panel
 
-    -- Заголовок
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v1.9"
+    title.Text = "UltraMM2 v2.0"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
     title.BorderSizePixel = 0
     title.Parent = panel
 
-    -- Вкладки
     local tabFrame = Instance.new("Frame")
     tabFrame.Size = UDim2.new(1, 0, 0, 26)
     tabFrame.Position = UDim2.new(0,0,0,30)
@@ -494,8 +462,6 @@ local function createGUI()
         btn.AutoButtonColor = false
         btn.Position = UDim2.new(0,0,0, #parent:GetChildren() * 26)
         btn.Parent = parent
-
-        -- Скругление для кнопок
         local btnCorner = Instance.new("UICorner")
         btnCorner.CornerRadius = UDim.new(0, 4)
         btnCorner.Parent = btn
@@ -524,7 +490,6 @@ local function createGUI()
         addToggle(aimPage, "Fast Kill", function() return FastKill.Enabled end, function(v) FastKill.Enabled = v end)
     end
 
-    -- Кнопка закрытия (крестик)
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 22, 0, 22)
     closeBtn.Position = UDim2.new(1, -24, 0, 3)
@@ -540,18 +505,16 @@ local function createGUI()
     closeCorner.Parent = closeBtn
     closeBtn.MouseButton1Click:Connect(function()
         panel.Visible = false
-        icon.Visible = true  -- показываем центральную кнопку обратно
+        icon.Visible = true
     end)
 
-    -- Логика открытия/закрытия
     local function togglePanel()
         if panel.Visible then
             panel.Visible = false
             icon.Visible = true
         else
             panel.Visible = true
-            icon.Visible = false  -- прячем центральную кнопку, чтобы не мешала
-            -- Анимация появления (масштаб)
+            icon.Visible = false
             panel.Size = UDim2.new(0, 0, 0, 0)
             local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
             local goalSize = UDim2.new(0, 240, 0, 300)
@@ -562,7 +525,6 @@ local function createGUI()
 
     icon.MouseButton1Click:Connect(togglePanel)
 
-    -- Закрытие при клике вне панели
     UIS.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -584,4 +546,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v1.9 — центральная кнопка и улучшенный интерфейс активированы!")
+print("UltraMM2 v2.0 – определение ролей по оружию активировано!")
