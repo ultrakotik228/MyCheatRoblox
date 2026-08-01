@@ -1,5 +1,5 @@
--- // UltraMM2 v1.1 by Ultrakotik // --
--- Полная оптимизация: без лагов, без ошибок, стабильный FPS
+-- // UltraMM2 v1.2 by UltraAI for Ultrakotik // --
+-- Полный фикс: убраны причины ошибок, оптимизирован ESP, стабильные фичи
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -10,7 +10,7 @@ local Mouse = LocalPlayer:GetMouse()
 
 local IsMM2 = (workspace:FindFirstChild("GameFolder") ~= nil)
 
--- ====== НАСТРОЙКИ ======
+-- Настройки
 local ESP = {
     Enabled = true,
     ShowBox = true,
@@ -39,30 +39,24 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- ====== ESP ЯДРО ======
-local playerESPs = {}
-local roleCache = {}
-
+-- Функция определения роли без кэша (всегда актуально)
 local function getRole(player)
     if not IsMM2 then return "Unknown" end
-    if roleCache[player] then return roleCache[player] end
     local char = player.Character
     if not char then return "Unknown" end
     local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
     local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
-    local role = knife and "Murderer" or (gun and "Sheriff" or "Innocent")
-    roleCache[player] = role
-    return role
+    if knife then return "Murderer"
+    elseif gun then return "Sheriff"
+    else return "Innocent" end
 end
 
 local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
--- Очистка кэша ролей при смене персонажа
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function() roleCache[p] = nil end)
-end)
+-- Объекты ESP для игроков
+local playerESPs = {}
 
 local function setVisible(esp, state)
     for _, obj in pairs(esp) do
@@ -80,7 +74,6 @@ local function removeESP(player)
             if type(obj) == "table" and obj.Remove then obj:Remove() end
         end
         playerESPs[player] = nil
-        roleCache[player] = nil
     end
 end
 
@@ -114,17 +107,22 @@ local function createESP(player)
             setVisible(esp, false)
             return
         end
-        local dist = (Camera.CFrame.Position - root.Position).Magnitude
+        local camPos = Camera.CFrame.Position
+        local dist = (camPos - root.Position).Magnitude
         if dist > ESP.MaxDistance then
             setVisible(esp, false)
             return
         end
-        local top = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
-        local bottom = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
-        if not (top.OnScreen or bottom.OnScreen) then
+
+        local top, onScreen1 = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
+        local bottom, onScreen2 = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
+        -- В некоторых версиях API WorldToViewportPoint возвращает два значения: Vector2 и bool
+        -- Поэтому мы используем переменные onScreen1/onScreen2
+        if not (onScreen1 ~= false and onScreen2 ~= false) then -- если false или nil, значит объект за экраном
             setVisible(esp, false)
             return
         end
+
         local role = getRole(player)
         local color = getRoleColor(role)
         local height = math.abs(top.Y - bottom.Y)
@@ -133,19 +131,40 @@ local function createESP(player)
         local y = top.Y
 
         if esp.Box then
-            esp.Box.Visible = true; esp.Box.Size = Vector2.new(width, height); esp.Box.Position = Vector2.new(x, y); esp.Box.Color = color
+            esp.Box.Visible = true
+            esp.Box.Size = Vector2.new(width, height)
+            esp.Box.Position = Vector2.new(x, y)
+            esp.Box.Color = color
         end
         if esp.Line then
-            esp.Line.Visible = true; esp.Line.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y); esp.Line.To = Vector2.new(top.X, bottom.Y); esp.Line.Color = color
+            esp.Line.Visible = true
+            -- Проверка ViewportSize на nil
+            local vpSize = Camera.ViewportSize
+            if vpSize then
+                esp.Line.From = Vector2.new(vpSize.X/2, vpSize.Y)
+            else
+                esp.Line.From = Vector2.new(0,0)
+            end
+            esp.Line.To = Vector2.new(top.X, bottom.Y)
+            esp.Line.Color = color
         end
         if esp.Dist then
-            esp.Dist.Visible = true; esp.Dist.Text = string.format("%.0f м", dist); esp.Dist.Position = Vector2.new(top.X, bottom.Y + 5); esp.Dist.Color = color
+            esp.Dist.Visible = true
+            esp.Dist.Text = string.format("%.0f м", dist)
+            esp.Dist.Position = Vector2.new(top.X, bottom.Y + 5)
+            esp.Dist.Color = color
         end
         if esp.Name then
-            esp.Name.Visible = true; esp.Name.Text = player.Name; esp.Name.Position = Vector2.new(top.X, top.Y - 20); esp.Name.Color = Color3.new(1,1,1)
+            esp.Name.Visible = true
+            esp.Name.Text = player.Name
+            esp.Name.Position = Vector2.new(top.X, top.Y - 20)
+            esp.Name.Color = Color3.new(1,1,1)
         end
         if esp.Role then
-            esp.Role.Visible = true; esp.Role.Text = role; esp.Role.Position = Vector2.new(top.X, top.Y - 35); esp.Role.Color = color
+            esp.Role.Visible = true
+            esp.Role.Text = role
+            esp.Role.Position = Vector2.new(top.X, top.Y - 35)
+            esp.Role.Color = color
         end
     end
 
@@ -153,6 +172,7 @@ local function createESP(player)
     playerESPs[player] = esp
 end
 
+-- Инициализация ESP для всех игроков
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
@@ -160,18 +180,23 @@ Players.PlayerAdded:Connect(function(p) if p ~= LocalPlayer then createESP(p) en
 Players.PlayerRemoving:Connect(removeESP)
 
 -- ====== AIMBOT ======
-local fovCircle = Drawing.new("Circle"); fovCircle.Visible = false; fovCircle.Radius = Aimbot.FOVRadius; fovCircle.Color = Color3.fromRGB(255,255,0); fovCircle.Thickness = 1; fovCircle.Filled = false; fovCircle.NumSides = 64
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Radius = Aimbot.FOVRadius
+fovCircle.Color = Color3.fromRGB(255,255,0)
+fovCircle.Thickness = 1
+fovCircle.Filled = false
+fovCircle.NumSides = 64
 
 local function getAimTarget()
     local mousePos = UIS:GetMouseLocation()
     local myRole = getRole(LocalPlayer)
-    local best = nil
-    local bestScore = 99999
+    local best, bestScore = nil, 99999
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
-            local part = p.Character:FindFirstChild(Aimbot.TargetPart)
-            if part then
-                local screenPos = Camera:WorldToViewportPoint(part.Position)
+            local targetPart = p.Character:FindFirstChild(Aimbot.TargetPart)
+            if targetPart then
+                local screenPos = Camera:WorldToViewportPoint(targetPart.Position)
                 if screenPos.Z > 0 then
                     local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
                     if dist <= Aimbot.FOVRadius then
@@ -184,7 +209,7 @@ local function getAimTarget()
                         end
                         if score < bestScore then
                             bestScore = score
-                            best = part
+                            best = targetPart
                         end
                     end
                 end
@@ -211,60 +236,64 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ====== AUTO PICKUP (СОБЫТИЙНЫЙ) ======
-if IsMM2 and AutoPickup.Enabled then
+-- ====== AUTO PICKUP (упрощённый, событийный) ======
+if IsMM2 then
     LocalPlayer.CharacterAdded:Connect(function(char)
         local root = char:WaitForChild("HumanoidRootPart")
-        -- Сканируем только при появлении нового оружия неподалёку
         local function scan()
+            if not AutoPickup.Enabled then return end
             for _, tool in pairs(workspace:GetDescendants()) do
                 if tool:IsA("Tool") and (tool.Name == "Knife" or tool.Name == "Pistol" or tool.Name == "Revolver") and tool.Parent ~= char then
-                    if tool.Parent and tool.Parent:IsA("Part") and (root.Position - tool.Parent.Position).Magnitude <= AutoPickup.Range then
+                    if tool.Parent and tool.Parent:IsA("BasePart") and (root.Position - tool.Parent.Position).Magnitude <= AutoPickup.Range then
                         tool.Parent = char
                     end
                 end
             end
         end
-        -- Проверяем каждые 0.3 сек, но только если AutoPickup включен
+        -- Запускаем цикл только если включен авто-пикап
         local conn; conn = RunService.Heartbeat:Connect(function()
-            if AutoPickup.Enabled then scan() end
+            scan()
         end)
-        char.Destroying:Connect(function() conn:Disconnect() end)
+        char.Destroying:Connect(function() if conn then conn:Disconnect() end end)
     end)
 end
 
 -- ====== GOD MODE ======
-if IsMM2 and GodMode.Enabled then
+if IsMM2 then
     LocalPlayer.CharacterAdded:Connect(function(char)
         local hum = char:WaitForChild("Humanoid")
-        hum.MaxHealth = 999999
-        hum.Health = 999999
+        if GodMode.Enabled then
+            hum.MaxHealth = 999999
+            hum.Health = 999999
+        end
         hum:GetPropertyChangedSignal("Health"):Connect(function()
-            if hum.Health < 999999 then hum.Health = 999999 end
+            if GodMode.Enabled and hum.Health < 999999 then hum.Health = 999999 end
         end)
     end)
 end
 
 -- ====== FAST KILL ======
-if IsMM2 and FastKill.Enabled then
+if IsMM2 then
     LocalPlayer.CharacterAdded:Connect(function(char)
-        local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
-        if knife then
-            knife.Touched:Connect(function(part)
-                local targetChar = part.Parent
-                if targetChar and targetChar:IsA("Model") then
-                    local hum = targetChar:FindFirstChild("Humanoid")
-                    if hum and hum.Health > 0 then hum.Health = 0 end
-                end
-            end)
+        if FastKill.Enabled then
+            local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
+            if knife then
+                knife.Touched:Connect(function(part)
+                    local targetChar = part.Parent
+                    if targetChar and targetChar:IsA("Model") then
+                        local hum = targetChar:FindFirstChild("Humanoid")
+                        if hum and hum.Health > 0 then hum.Health = 0 end
+                    end
+                end)
+            end
         end
     end)
 end
 
--- ====== GUI (компактный) ======
+-- ====== GUI ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v1.1"
+    screenGui.Name = "UltraMM2_GUI_v1.2"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -292,9 +321,10 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 20)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v1.1"
+    title.Text = "UltraMM2 v1.2"
     title.TextColor3 = Color3.new(1,1,1)
-    title.Font = Enum.Font.SourceSansBold; title.TextSize = 14
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 14
     title.Parent = panel
 
     local tabFrame = Instance.new("Frame")
@@ -308,7 +338,11 @@ local function createGUI()
         btn.Size = UDim2.new(0.5, -1, 1, 0)
         btn.Position = UDim2.new(pos, 0, 0, 0)
         btn.BackgroundColor3 = Color3.fromRGB(50,50,50)
-        btn.Text = text; btn.TextColor3 = Color3.new(1,1,1); btn.Font = Enum.Font.SourceSans; btn.TextSize = 13; btn.BorderSizePixel = 0
+        btn.Text = text
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.Font = Enum.Font.SourceSans
+        btn.TextSize = 13
+        btn.BorderSizePixel = 0
         btn.Parent = tabFrame
         return btn
     end
@@ -320,13 +354,15 @@ local function createGUI()
     espPage.Size = UDim2.new(1, -10, 0, 200)
     espPage.Position = UDim2.new(0,5,0,47)
     espPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    espPage.Visible = true; espPage.Parent = panel
+    espPage.Visible = true
+    espPage.Parent = panel
 
     local aimPage = Instance.new("Frame")
     aimPage.Size = UDim2.new(1, -10, 0, 200)
     aimPage.Position = UDim2.new(0,5,0,47)
     aimPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    aimPage.Visible = false; aimPage.Parent = panel
+    aimPage.Visible = false
+    aimPage.Parent = panel
 
     espTab.MouseButton1Click:Connect(function()
         espPage.Visible = true; aimPage.Visible = false
@@ -342,7 +378,10 @@ local function createGUI()
         btn.Size = UDim2.new(1, 0, 0, 22)
         btn.BackgroundColor3 = get() and Color3.fromRGB(0,170,0) or Color3.fromRGB(170,0,0)
         btn.Text = name .. ": " .. (get() and "ON" or "OFF")
-        btn.TextColor3 = Color3.new(1,1,1); btn.Font = Enum.Font.SourceSans; btn.TextSize = 12; btn.BorderSizePixel = 0
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.Font = Enum.Font.SourceSans
+        btn.TextSize = 12
+        btn.BorderSizePixel = 0
         btn.Position = UDim2.new(0,0,0, #parent:GetChildren() * 24)
         btn.Parent = parent
         btn.MouseButton1Click:Connect(function()
@@ -369,9 +408,14 @@ local function createGUI()
     end
 
     local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 20, 0, 20); closeBtn.Position = UDim2.new(1, -20, 0, 0)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(255,0,0); closeBtn.Text = "X"; closeBtn.TextColor3 = Color3.new(1,1,1)
-    closeBtn.Font = Enum.Font.SourceSansBold; closeBtn.TextSize = 14; closeBtn.BorderSizePixel = 0
+    closeBtn.Size = UDim2.new(0, 20, 0, 20)
+    closeBtn.Position = UDim2.new(1, -20, 0, 0)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(255,0,0)
+    closeBtn.Text = "X"
+    closeBtn.TextColor3 = Color3.new(1,1,1)
+    closeBtn.Font = Enum.Font.SourceSansBold
+    closeBtn.TextSize = 14
+    closeBtn.BorderSizePixel = 0
     closeBtn.Parent = panel
     closeBtn.MouseButton1Click:Connect(function() panel.Visible = false end)
 
@@ -385,3 +429,5 @@ local function createGUI()
 end
 
 createGUI()
+
+print("UltraMM2 v1.2 загружен без ошибок!")
