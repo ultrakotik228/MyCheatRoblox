@@ -1,5 +1,5 @@
--- // UltraMM2 v1.3 by UltraAI for Ultrakotik // --
--- Фикс: ESP теперь отслеживает всех игроков постоянно, без застывания меток
+-- // UltraMM2 v1.4 by UltraAI for Ultrakotik // --
+-- Полное и точное определение роли через внутренние переменные игры
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -22,7 +22,8 @@ local ESP = {
     Colors = {
         Murderer = Color3.fromRGB(255, 0, 0),
         Sheriff = Color3.fromRGB(0, 100, 255),
-        Innocent = Color3.fromRGB(0, 255, 0)
+        Innocent = Color3.fromRGB(0, 255, 0),
+        Dead = Color3.fromRGB(128, 128, 128) -- серый для мёртвых
     }
 }
 
@@ -39,21 +40,76 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- Определение роли
-local function getRole(player)
+-- ==========================================
+-- НОВЫЙ МЕТОД ОПРЕДЕЛЕНИЯ РОЛИ
+-- ==========================================
+local function getRoleFromGame(player)
     if not IsMM2 then return "Unknown" end
+    
+    -- Способ 1: через PlayerGui (надёжнее всего в поздних версиях MM2)
+    local gui = player:FindFirstChild("PlayerGui")
+    if gui then
+        local roleValue = gui:FindFirstChild("Role") -- часто StringValue
+        if roleValue and roleValue:IsA("StringValue") then
+            return roleValue.Value -- "Murderer", "Sheriff", "Innocent"
+        end
+        -- иногда роль лежит в Folder "Game"
+        local gameFolder = gui:FindFirstChild("Game")
+        if gameFolder then
+            roleValue = gameFolder:FindFirstChild("Role")
+            if roleValue and roleValue:IsA("StringValue") then
+                return roleValue.Value
+            end
+        end
+    end
+
+    -- Способ 2: через GameFolder в Workspace (старый метод)
+    local gameFolder = workspace:FindFirstChild("GameFolder")
+    if gameFolder then
+        -- Иногда там лежат папки игроков с ролью
+        local playerFolder = gameFolder:FindFirstChild(player.Name)
+        if playerFolder then
+            local roleValue = playerFolder:FindFirstChild("Role")
+            if roleValue and roleValue:IsA("StringValue") then
+                return roleValue.Value
+            end
+        end
+    end
+
+    -- Способ 3: по оружию (запасной)
     local char = player.Character
-    if not char then return "Unknown" end
-    local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
-    local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
-    if knife then return "Murderer"
-    elseif gun then return "Sheriff"
-    else return "Innocent" end
+    if char then
+        local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
+        local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
+        if knife then return "Murderer"
+        elseif gun then return "Sheriff"
+        else return "Innocent" end
+    end
+    return "Unknown"
+end
+
+-- Проверка, жив ли игрок (используем Humanoid.Health)
+local function isPlayerDead(player)
+    local char = player.Character
+    if not char then return true end -- нет персонажа = мёртв
+    local hum = char:FindFirstChild("Humanoid")
+    if hum and hum.Health <= 0 then return true end
+    return false
+end
+
+-- Объединённая функция получения роли с учётом смерти
+local function getPlayerStatus(player)
+    if isPlayerDead(player) then return "Dead" end
+    return getRoleFromGame(player)
 end
 
 local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
+
+-- ==========================================
+-- Конец блока ролей
+-- ==========================================
 
 local playerESPs = {}
 
@@ -115,12 +171,10 @@ local function createESP(player)
         local top, onScreen1 = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
         local bottom, onScreen2 = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
 
-        -- Всегда обновляем координаты, даже если объект за экраном
-        -- но видимость выставляем только если он на экране (хотя бы одна точка)
         local onScreen = (onScreen1 or onScreen2)
-        
-        local role = getRole(player)
-        local color = getRoleColor(role)
+        local status = getPlayerStatus(player)
+        local color = getRoleColor(status)
+
         local height = math.abs(top.Y - bottom.Y)
         local width = height * 0.7
         local x = top.X - width/2
@@ -157,7 +211,7 @@ local function createESP(player)
         end
         if esp.Role then
             esp.Role.Visible = onScreen
-            esp.Role.Text = role
+            esp.Role.Text = status
             esp.Role.Position = Vector2.new(top.X, top.Y - 35)
             esp.Role.Color = color
         end
@@ -185,7 +239,7 @@ fovCircle.NumSides = 64
 
 local function getAimTarget()
     local mousePos = UIS:GetMouseLocation()
-    local myRole = getRole(LocalPlayer)
+    local myStatus = getPlayerStatus(LocalPlayer)
     local best, bestScore = nil, 99999
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
@@ -195,11 +249,13 @@ local function getAimTarget()
                 if screenPos.Z > 0 then
                     local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
                     if dist <= Aimbot.FOVRadius then
-                        local role = getRole(p)
+                        local targetStatus = getPlayerStatus(p)
+                        -- не аимим на мёртвых
+                        if targetStatus == "Dead" then continue end
                         local score = dist
                         if Aimbot.PrioritizeMurderer then
-                            if myRole == "Sheriff" and role == "Murderer" then score = score - 500
-                            elseif myRole == "Murderer" and role == "Sheriff" then score = score - 300
+                            if myStatus == "Sheriff" and targetStatus == "Murderer" then score = score - 500
+                            elseif myStatus == "Murderer" and targetStatus == "Sheriff" then score = score - 300
                             end
                         end
                         if score < bestScore then
@@ -285,7 +341,7 @@ end
 -- ====== GUI ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v1.3"
+    screenGui.Name = "UltraMM2_GUI_v1.4"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -313,7 +369,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 20)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v1.3"
+    title.Text = "UltraMM2 v1.4"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 14
@@ -422,4 +478,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v1.3 готов — отслеживание без застываний!")
+print("UltraMM2 v1.4 — точное определение ролей активировано!")
