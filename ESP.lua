@@ -1,5 +1,5 @@
--- // UltraMM2 v1.4 by UltraAI for Ultrakotik // --
--- Полное и точное определение роли через внутренние переменные игры
+-- // UltraMM2 v1.5 by UltraAI for Ultrakotik // --
+-- Мёртвые игроки скрыты, улучшенная вкладка ESP, точные роли
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -18,12 +18,13 @@ local ESP = {
     ShowDistance = true,
     ShowName = true,
     ShowRole = true,
+    ShowDead = false,   -- теперь по умолчанию мёртвые не видны
     MaxDistance = 2000,
     Colors = {
         Murderer = Color3.fromRGB(255, 0, 0),
         Sheriff = Color3.fromRGB(0, 100, 255),
         Innocent = Color3.fromRGB(0, 255, 0),
-        Dead = Color3.fromRGB(128, 128, 128) -- серый для мёртвых
+        Dead = Color3.fromRGB(128, 128, 128)
     }
 }
 
@@ -40,20 +41,15 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- ==========================================
--- НОВЫЙ МЕТОД ОПРЕДЕЛЕНИЯ РОЛИ
--- ==========================================
+-- Точное определение роли (как в v1.4, но без изменений)
 local function getRoleFromGame(player)
     if not IsMM2 then return "Unknown" end
-    
-    -- Способ 1: через PlayerGui (надёжнее всего в поздних версиях MM2)
     local gui = player:FindFirstChild("PlayerGui")
     if gui then
-        local roleValue = gui:FindFirstChild("Role") -- часто StringValue
+        local roleValue = gui:FindFirstChild("Role")
         if roleValue and roleValue:IsA("StringValue") then
-            return roleValue.Value -- "Murderer", "Sheriff", "Innocent"
+            return roleValue.Value
         end
-        -- иногда роль лежит в Folder "Game"
         local gameFolder = gui:FindFirstChild("Game")
         if gameFolder then
             roleValue = gameFolder:FindFirstChild("Role")
@@ -62,11 +58,8 @@ local function getRoleFromGame(player)
             end
         end
     end
-
-    -- Способ 2: через GameFolder в Workspace (старый метод)
     local gameFolder = workspace:FindFirstChild("GameFolder")
     if gameFolder then
-        -- Иногда там лежат папки игроков с ролью
         local playerFolder = gameFolder:FindFirstChild(player.Name)
         if playerFolder then
             local roleValue = playerFolder:FindFirstChild("Role")
@@ -75,8 +68,7 @@ local function getRoleFromGame(player)
             end
         end
     end
-
-    -- Способ 3: по оружию (запасной)
+    -- Запасной способ: оружие
     local char = player.Character
     if char then
         local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
@@ -88,16 +80,14 @@ local function getRoleFromGame(player)
     return "Unknown"
 end
 
--- Проверка, жив ли игрок (используем Humanoid.Health)
 local function isPlayerDead(player)
     local char = player.Character
-    if not char then return true end -- нет персонажа = мёртв
+    if not char then return true end
     local hum = char:FindFirstChild("Humanoid")
     if hum and hum.Health <= 0 then return true end
     return false
 end
 
--- Объединённая функция получения роли с учётом смерти
 local function getPlayerStatus(player)
     if isPlayerDead(player) then return "Dead" end
     return getRoleFromGame(player)
@@ -106,10 +96,6 @@ end
 local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
-
--- ==========================================
--- Конец блока ролей
--- ==========================================
 
 local playerESPs = {}
 
@@ -155,6 +141,15 @@ local function createESP(player)
             setVisible(esp, false)
             return
         end
+
+        local status = getPlayerStatus(player)
+
+        -- Если игрок мёртв и показ мёртвых выключен — немедленно скрываем всё
+        if status == "Dead" and not ESP.ShowDead then
+            setVisible(esp, false)
+            return
+        end
+
         local char = player.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
         local head = char and char:FindFirstChild("Head")
@@ -162,6 +157,7 @@ local function createESP(player)
             setVisible(esp, false)
             return
         end
+
         local dist = (Camera.CFrame.Position - root.Position).Magnitude
         if dist > ESP.MaxDistance then
             setVisible(esp, false)
@@ -172,7 +168,6 @@ local function createESP(player)
         local bottom, onScreen2 = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
 
         local onScreen = (onScreen1 or onScreen2)
-        local status = getPlayerStatus(player)
         local color = getRoleColor(status)
 
         local height = math.abs(top.Y - bottom.Y)
@@ -341,7 +336,7 @@ end
 -- ====== GUI ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v1.4"
+    screenGui.Name = "UltraMM2_GUI_v1.5"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -357,7 +352,7 @@ local function createGUI()
     icon.Parent = screenGui
 
     local panel = Instance.new("Frame")
-    panel.Size = UDim2.new(0, 220, 0, 260)
+    panel.Size = UDim2.new(0, 220, 0, 280) -- немного увеличена высота для нового переключателя
     panel.Position = UDim2.new(0, 50, 0, 10)
     panel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     panel.BorderSizePixel = 0
@@ -369,7 +364,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 20)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v1.4"
+    title.Text = "UltraMM2 v1.5"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 14
@@ -399,14 +394,14 @@ local function createGUI()
     local aimTab = createTab("Aimbot", 0.5)
 
     local espPage = Instance.new("Frame")
-    espPage.Size = UDim2.new(1, -10, 0, 200)
+    espPage.Size = UDim2.new(1, -10, 0, 220) -- увеличил под новый тоггл
     espPage.Position = UDim2.new(0,5,0,47)
     espPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
     espPage.Visible = true
     espPage.Parent = panel
 
     local aimPage = Instance.new("Frame")
-    aimPage.Size = UDim2.new(1, -10, 0, 200)
+    aimPage.Size = UDim2.new(1, -10, 0, 220)
     aimPage.Position = UDim2.new(0,5,0,47)
     aimPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
     aimPage.Visible = false
@@ -440,13 +435,16 @@ local function createGUI()
         end)
     end
 
+    -- Вкладка ESP: более логичный порядок
     addToggle(espPage, "ESP Enabled", function() return ESP.Enabled end, function(v) ESP.Enabled = v end)
     addToggle(espPage, "Show Box", function() return ESP.ShowBox end, function(v) ESP.ShowBox = v end)
     addToggle(espPage, "Show Line", function() return ESP.ShowLine end, function(v) ESP.ShowLine = v end)
     addToggle(espPage, "Show Dist", function() return ESP.ShowDistance end, function(v) ESP.ShowDistance = v end)
     addToggle(espPage, "Show Name", function() return ESP.ShowName end, function(v) ESP.ShowName = v end)
     addToggle(espPage, "Show Role", function() return ESP.ShowRole end, function(v) ESP.ShowRole = v end)
+    addToggle(espPage, "Show Dead", function() return ESP.ShowDead end, function(v) ESP.ShowDead = v end)
 
+    -- Вкладка Aimbot
     addToggle(aimPage, "Aimbot", function() return Aimbot.Enabled end, function(v) Aimbot.Enabled = v end)
     addToggle(aimPage, "Prioritize Murder", function() return Aimbot.PrioritizeMurderer end, function(v) Aimbot.PrioritizeMurderer = v end)
     if IsMM2 then
@@ -478,4 +476,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v1.4 — точное определение ролей активировано!")
+print("UltraMM2 v1.5 — мёртвые скрыты, роли отображаются чётко.")
