@@ -1,5 +1,5 @@
--- // UltraMM2 v1.7 by UltraAI for Ultrakotik // --
--- Роли отображаются всегда, кэшируются и не исчезают
+-- // UltraMM2 v1.9 by UltraAI for Ultrakotik // --
+-- Центральная кнопка открытия, улучшенное UI, анимации
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -7,6 +7,7 @@ local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local UIS = game:GetService("UserInputService")
 local Mouse = LocalPlayer:GetMouse()
+local TweenService = game:GetService("TweenService")
 
 local IsMM2 = (workspace:FindFirstChild("GameFolder") ~= nil)
 
@@ -18,7 +19,7 @@ local ESP = {
     ShowDistance = true,
     ShowName = true,
     ShowRole = true,
-    ShowDead = false,   -- если false, ESP-рамка скрывается, но роль остаётся
+    ShowDead = false,
     MaxDistance = 2000,
     Colors = {
         Murderer = Color3.fromRGB(255, 0, 0),
@@ -41,14 +42,13 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- Кэш ролей (сохраняется навсегда, обновляется при возрождении)
-local roleCache = {}
-
--- Глубокий поиск роли (как в v1.6)
-local function deepFindRole(player)
+-- ==========================================
+-- ПОИСК РОЛИ (стабильный из v1.8)
+-- ==========================================
+local function findRole(player)
     local function search(parent)
         for _, child in pairs(parent:GetChildren()) do
-            if child:IsA("StringValue") and (child.Name == "Role" or child.Name:lower():match("role")) then
+            if child:IsA("StringValue") and child.Name == "Role" then
                 return child.Value
             end
             local result = search(child)
@@ -69,6 +69,12 @@ local function deepFindRole(player)
         if role then return role end
     end
 
+    for _, child in pairs(player:GetChildren()) do
+        if child:IsA("ObjectValue") and child.Name == "Role" then
+            return tostring(child.Value)
+        end
+    end
+
     local char = player.Character
     if char then
         local role = search(char)
@@ -81,7 +87,6 @@ local function deepFindRole(player)
         if role then return role end
     end
 
-    -- Запасной: оружие
     if char then
         local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
         local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
@@ -89,11 +94,9 @@ local function deepFindRole(player)
         elseif gun then return "Sheriff"
         else return "Innocent" end
     end
-
     return nil
 end
 
--- Нормализация названия роли
 local function normalizeRole(rawRole)
     if not rawRole then return "Unknown" end
     local r = rawRole:lower()
@@ -103,26 +106,6 @@ local function normalizeRole(rawRole)
     else return rawRole end
 end
 
--- Получение роли с кэшированием
-local function getCachedRole(player)
-    if not IsMM2 then return "Unknown" end
-    -- При возрождении персонажа сбрасываем кэш
-    if player.Character then
-        local hum = player.Character:FindFirstChild("Humanoid")
-        if hum and hum.Health > 0 then
-            -- Живой, можно попытаться найти роль
-            local role = deepFindRole(player)
-            if role then
-                roleCache[player] = normalizeRole(role)
-            elseif not roleCache[player] then
-                roleCache[player] = "Unknown"
-            end
-        end
-    end
-    return roleCache[player] or "Unknown"
-end
-
--- Проверка, мёртв ли игрок
 local function isPlayerDead(player)
     local char = player.Character
     if not char then return true end
@@ -131,25 +114,36 @@ local function isPlayerDead(player)
     return false
 end
 
-local function getPlayerStatus(player)
-    local dead = isPlayerDead(player)
-    local role = getCachedRole(player)
-    if dead then return "Dead" end
-    return role
+local function getStatus(player)
+    if isPlayerDead(player) then return "Dead" end
+    local role = findRole(player)
+    if role then return normalizeRole(role) end
+    if not player._debugDone then
+        warn("Не удалось определить роль для " .. player.Name .. ". PlayerGui содержит:")
+        local gui = player:FindFirstChild("PlayerGui")
+        if gui then
+            for _, child in pairs(gui:GetChildren()) do
+                warn("  " .. child.Name .. " [" .. child.ClassName .. "]")
+            end
+        else
+            warn("  PlayerGui отсутствует")
+        end
+        player._debugDone = true
+    end
+    return "Unknown"
 end
 
 local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
--- Сброс кэша при возрождении
 Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function()
-        roleCache[p] = nil -- заставит переопределить роль
-    end)
+    p.CharacterAdded:Connect(function() p._debugDone = nil end)
 end)
 
--- Хранилище ESP
+-- ==========================================
+-- ESP
+-- ==========================================
 local playerESPs = {}
 
 local function setVisible(esp, state)
@@ -195,15 +189,16 @@ local function createESP(player)
             return
         end
 
-        local status = getPlayerStatus(player)
-        local roleText = getCachedRole(player) -- всегда берём кэшированную роль для отображения
+        local status = getStatus(player)
+        if status == "Dead" and not ESP.ShowDead then
+            setVisible(esp, false)
+            return
+        end
 
         local char = player.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
         local head = char and char:FindFirstChild("Head")
         if not (root and head) then
-            -- Если персонажа нет, но роль есть, мы всё равно можем показать текст роли? 
-            -- Для простоты скроем всё, т.к. нет координат.
             setVisible(esp, false)
             return
         end
@@ -218,35 +213,21 @@ local function createESP(player)
         local bottom, onScreen2 = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
 
         local onScreen = (onScreen1 or onScreen2)
-
-        -- Определяем, нужно ли показывать рамку/линию/расстояние
-        local showFullESP = true
-        if status == "Dead" and not ESP.ShowDead then
-            showFullESP = false
-        end
-
-        -- Цвет для роли: если мёртв и ShowDead выключен, всё равно покажем роль серым
-        local roleColor = getRoleColor(roleText) -- кэшированная роль, не статус
-        if status == "Dead" and not ESP.ShowDead then
-            -- рамку не показываем, но роль видна
-            roleColor = ESP.Colors.Dead
-        end
+        local color = getRoleColor(status)
 
         local height = math.abs(top.Y - bottom.Y)
         local width = height * 0.7
         local x = top.X - width/2
         local y = top.Y
 
-        -- Бокс
         if esp.Box then
-            esp.Box.Visible = onScreen and showFullESP
+            esp.Box.Visible = onScreen
             esp.Box.Size = Vector2.new(width, height)
             esp.Box.Position = Vector2.new(x, y)
-            esp.Box.Color = roleColor
+            esp.Box.Color = color
         end
-        -- Линия
         if esp.Line then
-            esp.Line.Visible = onScreen and showFullESP
+            esp.Line.Visible = onScreen
             local vpSize = Camera.ViewportSize
             if vpSize then
                 esp.Line.From = Vector2.new(vpSize.X/2, vpSize.Y)
@@ -254,28 +235,25 @@ local function createESP(player)
                 esp.Line.From = Vector2.new(0,0)
             end
             esp.Line.To = Vector2.new(top.X, bottom.Y)
-            esp.Line.Color = roleColor
+            esp.Line.Color = color
         end
-        -- Расстояние
         if esp.Dist then
-            esp.Dist.Visible = onScreen and showFullESP
+            esp.Dist.Visible = onScreen
             esp.Dist.Text = string.format("%.0f м", dist)
             esp.Dist.Position = Vector2.new(top.X, bottom.Y + 5)
-            esp.Dist.Color = roleColor
+            esp.Dist.Color = color
         end
-        -- Имя
         if esp.Name then
             esp.Name.Visible = onScreen
             esp.Name.Text = player.Name
             esp.Name.Position = Vector2.new(top.X, top.Y - 20)
             esp.Name.Color = Color3.new(1,1,1)
         end
-        -- Роль (всегда показываем, если ShowRole включена, даже если рамка скрыта)
         if esp.Role then
             esp.Role.Visible = onScreen and ESP.ShowRole
-            esp.Role.Text = roleText -- кэшированная роль
+            esp.Role.Text = status
             esp.Role.Position = Vector2.new(top.X, top.Y - 35)
-            esp.Role.Color = roleColor
+            esp.Role.Color = color
         end
     end
 
@@ -283,25 +261,20 @@ local function createESP(player)
     playerESPs[player] = esp
 end
 
--- Инициализация
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
 Players.PlayerAdded:Connect(function(p) if p ~= LocalPlayer then createESP(p) end end)
 Players.PlayerRemoving:Connect(removeESP)
 
--- ====== AIMBOT (без изменений) ======
+-- ====== AIMBOT ======
 local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = false
-fovCircle.Radius = Aimbot.FOVRadius
-fovCircle.Color = Color3.fromRGB(255,255,0)
-fovCircle.Thickness = 1
-fovCircle.Filled = false
-fovCircle.NumSides = 64
+fovCircle.Visible = false; fovCircle.Radius = Aimbot.FOVRadius; fovCircle.Color = Color3.fromRGB(255,255,0)
+fovCircle.Thickness = 1; fovCircle.Filled = false; fovCircle.NumSides = 64
 
 local function getAimTarget()
     local mousePos = UIS:GetMouseLocation()
-    local myStatus = getPlayerStatus(LocalPlayer)
+    local myStatus = getStatus(LocalPlayer)
     local best, bestScore = nil, 99999
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
@@ -311,7 +284,7 @@ local function getAimTarget()
                 if screenPos.Z > 0 then
                     local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
                     if dist <= Aimbot.FOVRadius then
-                        local targetStatus = getPlayerStatus(p)
+                        local targetStatus = getStatus(p)
                         if targetStatus == "Dead" then continue end
                         local score = dist
                         if Aimbot.PrioritizeMurderer then
@@ -348,7 +321,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ====== AUTO PICKUP, GOD MODE, FAST KILL (без изменений) ======
+-- ====== AUTO PICKUP, GOD MODE, FAST KILL ======
 if IsMM2 then
     LocalPlayer.CharacterAdded:Connect(function(char)
         local root = char:WaitForChild("HumanoidRootPart")
@@ -393,54 +366,92 @@ if IsMM2 then
     end)
 end
 
--- ====== GUI (упрощённый) ======
+-- ====== УЛУЧШЕННЫЙ GUI С ЦЕНТРАЛЬНОЙ КНОПКОЙ ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v1.7"
+    screenGui.Name = "UltraMM2_GUI_v1.9"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
+    -- Центральная круглая кнопка
     local icon = Instance.new("TextButton")
-    icon.Size = UDim2.new(0, 32, 0, 32)
-    icon.Position = UDim2.new(0, 10, 0, 10)
-    icon.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    icon.Text = ""
+    icon.Size = UDim2.new(0, 40, 0, 40)                     -- 40x40 пикселей
+    icon.AnchorPoint = Vector2.new(0.5, 0.5)                -- якорь по центру
+    icon.Position = UDim2.new(0.5, 0, 0.5, 0)               -- строго центр экрана
+    icon.BackgroundColor3 = Color3.fromRGB(255, 0, 0)       -- красный
+    icon.TextColor3 = Color3.new(1,1,1)
+    icon.Text = "U"                                          -- буква U (можно заменить на "")
+    icon.Font = Enum.Font.SourceSansBold
+    icon.TextSize = 20
     icon.BorderSizePixel = 0
     icon.AutoButtonColor = false
     icon.Active = true
     icon.Draggable = true
     icon.Parent = screenGui
 
+    -- Скругление для круглой кнопки
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)                     -- полностью круглое
+    corner.Parent = icon
+
+    -- Основная панель (в центре, изначально скрыта)
     local panel = Instance.new("Frame")
-    panel.Size = UDim2.new(0, 220, 0, 260)
-    panel.Position = UDim2.new(0, 50, 0, 10)
-    panel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    panel.Size = UDim2.new(0, 240, 0, 300)
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+    panel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    panel.BackgroundTransparency = 0.1                      -- лёгкая прозрачность
     panel.BorderSizePixel = 0
     panel.Visible = false
     panel.Active = true
     panel.Draggable = true
     panel.Parent = screenGui
 
+    -- Скругление для панели
+    local panelCorner = Instance.new("UICorner")
+    panelCorner.CornerRadius = UDim.new(0, 8)
+    panelCorner.Parent = panel
+
+    -- Тень под панелью (эмулируем)
+    local shadow = Instance.new("ImageLabel")
+    shadow.Size = UDim2.new(1, 20, 1, 20)
+    shadow.Position = UDim2.new(0, -10, 0, -10)
+    shadow.BackgroundTransparency = 1
+    shadow.Image = "rbxassetid://6015897843"                -- стандартный ресурс тени
+    shadow.ImageTransparency = 0.5
+    shadow.ScaleType = Enum.ScaleType.Slice
+    shadow.SliceCenter = Rect.new(10,10,10,10)
+    shadow.Parent = panel
+
+    -- Заголовок
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 20)
+    title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v1.7"
+    title.Text = "UltraMM2 v1.9"
     title.TextColor3 = Color3.new(1,1,1)
-    title.Font = Enum.Font.SourceSansBold; title.TextSize = 14
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 16
+    title.BorderSizePixel = 0
     title.Parent = panel
 
+    -- Вкладки
     local tabFrame = Instance.new("Frame")
-    tabFrame.Size = UDim2.new(1, 0, 0, 22)
-    tabFrame.Position = UDim2.new(0,0,0,22)
-    tabFrame.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    tabFrame.Size = UDim2.new(1, 0, 0, 26)
+    tabFrame.Position = UDim2.new(0,0,0,30)
+    tabFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    tabFrame.BorderSizePixel = 0
     tabFrame.Parent = panel
 
     local function createTab(text, pos)
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.new(0.5, -1, 1, 0)
         btn.Position = UDim2.new(pos, 0, 0, 0)
-        btn.BackgroundColor3 = Color3.fromRGB(50,50,50)
-        btn.Text = text; btn.TextColor3 = Color3.new(1,1,1); btn.Font = Enum.Font.SourceSans; btn.TextSize = 13; btn.BorderSizePixel = 0
+        btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+        btn.Text = text
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.Font = Enum.Font.SourceSans
+        btn.TextSize = 13
+        btn.BorderSizePixel = 0
         btn.Parent = tabFrame
         return btn
     end
@@ -449,38 +460,50 @@ local function createGUI()
     local aimTab = createTab("Aimbot", 0.5)
 
     local espPage = Instance.new("Frame")
-    espPage.Size = UDim2.new(1, -10, 0, 200)
-    espPage.Position = UDim2.new(0,5,0,47)
-    espPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    espPage.Visible = true; espPage.Parent = panel
+    espPage.Size = UDim2.new(1, -16, 0, 220)
+    espPage.Position = UDim2.new(0,8,0,62)
+    espPage.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    espPage.Visible = true
+    espPage.Parent = panel
 
     local aimPage = Instance.new("Frame")
-    aimPage.Size = UDim2.new(1, -10, 0, 200)
-    aimPage.Position = UDim2.new(0,5,0,47)
-    aimPage.BackgroundColor3 = Color3.fromRGB(30,30,30)
-    aimPage.Visible = false; aimPage.Parent = panel
+    aimPage.Size = UDim2.new(1, -16, 0, 220)
+    aimPage.Position = UDim2.new(0,8,0,62)
+    aimPage.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    aimPage.Visible = false
+    aimPage.Parent = panel
 
     espTab.MouseButton1Click:Connect(function()
         espPage.Visible = true; aimPage.Visible = false
-        espTab.BackgroundColor3 = Color3.fromRGB(80,80,80); aimTab.BackgroundColor3 = Color3.fromRGB(50,50,50)
+        espTab.BackgroundColor3 = Color3.fromRGB(60,60,60); aimTab.BackgroundColor3 = Color3.fromRGB(40,40,40)
     end)
     aimTab.MouseButton1Click:Connect(function()
         aimPage.Visible = true; espPage.Visible = false
-        aimTab.BackgroundColor3 = Color3.fromRGB(80,80,80); espTab.BackgroundColor3 = Color3.fromRGB(50,50,50)
+        aimTab.BackgroundColor3 = Color3.fromRGB(60,60,60); espTab.BackgroundColor3 = Color3.fromRGB(40,40,40)
     end)
 
     local function addToggle(parent, name, get, set)
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, 0, 0, 22)
-        btn.BackgroundColor3 = get() and Color3.fromRGB(0,170,0) or Color3.fromRGB(170,0,0)
+        btn.Size = UDim2.new(1, 0, 0, 24)
+        btn.BackgroundColor3 = get() and Color3.fromRGB(0,160,0) or Color3.fromRGB(160,0,0)
         btn.Text = name .. ": " .. (get() and "ON" or "OFF")
-        btn.TextColor3 = Color3.new(1,1,1); btn.Font = Enum.Font.SourceSans; btn.TextSize = 12; btn.BorderSizePixel = 0
-        btn.Position = UDim2.new(0,0,0, #parent:GetChildren() * 24)
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.Font = Enum.Font.SourceSans
+        btn.TextSize = 12
+        btn.BorderSizePixel = 0
+        btn.AutoButtonColor = false
+        btn.Position = UDim2.new(0,0,0, #parent:GetChildren() * 26)
         btn.Parent = parent
+
+        -- Скругление для кнопок
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 4)
+        btnCorner.Parent = btn
+
         btn.MouseButton1Click:Connect(function()
             local new = not get()
             set(new)
-            btn.BackgroundColor3 = new and Color3.fromRGB(0,170,0) or Color3.fromRGB(170,0,0)
+            btn.BackgroundColor3 = new and Color3.fromRGB(0,160,0) or Color3.fromRGB(160,0,0)
             btn.Text = name .. ": " .. (new and "ON" or "OFF")
         end)
     end
@@ -501,22 +524,64 @@ local function createGUI()
         addToggle(aimPage, "Fast Kill", function() return FastKill.Enabled end, function(v) FastKill.Enabled = v end)
     end
 
+    -- Кнопка закрытия (крестик)
     local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 20, 0, 20); closeBtn.Position = UDim2.new(1, -20, 0, 0)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(255,0,0); closeBtn.Text = "X"; closeBtn.TextColor3 = Color3.new(1,1,1)
-    closeBtn.Font = Enum.Font.SourceSansBold; closeBtn.TextSize = 14; closeBtn.BorderSizePixel = 0
+    closeBtn.Size = UDim2.new(0, 22, 0, 22)
+    closeBtn.Position = UDim2.new(1, -24, 0, 3)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    closeBtn.Text = "X"
+    closeBtn.TextColor3 = Color3.new(1,1,1)
+    closeBtn.Font = Enum.Font.SourceSansBold
+    closeBtn.TextSize = 14
+    closeBtn.BorderSizePixel = 0
     closeBtn.Parent = panel
-    closeBtn.MouseButton1Click:Connect(function() panel.Visible = false end)
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 4)
+    closeCorner.Parent = closeBtn
+    closeBtn.MouseButton1Click:Connect(function()
+        panel.Visible = false
+        icon.Visible = true  -- показываем центральную кнопку обратно
+    end)
 
-    icon.MouseButton1Click:Connect(function() panel.Visible = not panel.Visible end)
+    -- Логика открытия/закрытия
+    local function togglePanel()
+        if panel.Visible then
+            panel.Visible = false
+            icon.Visible = true
+        else
+            panel.Visible = true
+            icon.Visible = false  -- прячем центральную кнопку, чтобы не мешала
+            -- Анимация появления (масштаб)
+            panel.Size = UDim2.new(0, 0, 0, 0)
+            local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            local goalSize = UDim2.new(0, 240, 0, 300)
+            local tween = TweenService:Create(panel, tweenInfo, {Size = goalSize})
+            tween:Play()
+        end
+    end
+
+    icon.MouseButton1Click:Connect(togglePanel)
+
+    -- Закрытие при клике вне панели
     UIS.InputBegan:Connect(function(input, gpe)
         if gpe then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if panel.Visible then
+                local mousePos = UIS:GetMouseLocation()
+                local panelPos = panel.AbsolutePosition
+                local panelSize = panel.AbsoluteSize
+                if mousePos.X < panelPos.X or mousePos.X > panelPos.X + panelSize.X or
+                   mousePos.Y < panelPos.Y or mousePos.Y > panelPos.Y + panelSize.Y then
+                    togglePanel()
+                end
+            end
+        end
         if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
-            panel.Visible = not panel.Visible
+            togglePanel()
         end
     end)
 end
 
 createGUI()
 
-print("UltraMM2 v1.7 — роли теперь отображаются постоянно!")
+print("UltraMM2 v1.9 — центральная кнопка и улучшенный интерфейс активированы!")
