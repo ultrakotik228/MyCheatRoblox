@@ -1,0 +1,217 @@
+-- Настройки
+local SETTINGS = {
+    TeamCheck = false,        -- Не подсвечивать союзников (false - показывать всех)
+    ShowBox = true,           -- Прямоугольник вокруг игрока
+    BoxColor = Color3.fromRGB(255, 0, 0),  -- Цвет рамки (красный)
+    BoxThickness = 2,
+    BoxFilled = false,        -- Заливка (можно true)
+    FillColor = Color3.fromRGB(255, 0, 0),
+    FillTransparency = 0.3,   -- Прозрачность заливки
+    ShowLine = true,          -- Линия от центра экрана к цели
+    LineColor = Color3.fromRGB(255, 255, 255),
+    LineThickness = 1,
+    ShowDistance = true,      -- Расстояние до цели
+    DistanceColor = Color3.fromRGB(255, 255, 255),
+    DistanceSize = 14,        -- Размер шрифта
+    ShowName = true,          -- Имя игрока
+    NameColor = Color3.fromRGB(255, 255, 255),
+    NameSize = 14,
+    MaxDistance = 2000        -- Дальность прорисовки
+}
+
+-- Сервисы
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Хранилище графических объектов для каждого игрока
+local playerESPs = {}
+
+-- Функция создания ESP для одного игрока
+local function createESP(player)
+    -- Контейнер для объектов
+    local esp = {}
+
+    -- Рамка
+    if SETTINGS.ShowBox then
+        esp.Box = Drawing.new("Square")
+        esp.Box.Visible = false
+        esp.Box.Thickness = SETTINGS.BoxThickness
+        esp.Box.Color = SETTINGS.BoxColor
+        esp.Box.Filled = SETTINGS.BoxFilled
+        if SETTINGS.BoxFilled then
+            esp.Box.Filled = true
+            -- Для прозрачности через Color3 и прозрачность объекта не напрямую; можно через отдельный квадрат с альфой
+            -- Используем два квадрата: один залитый с низкой непрозрачностью
+            esp.BoxFill = Drawing.new("Square")
+            esp.BoxFill.Visible = false
+            esp.BoxFill.Filled = true
+            esp.BoxFill.Color = SETTINGS.FillColor
+            esp.BoxFill.Transparency = 1 - SETTINGS.FillTransparency -- У Drawing прозрачность 1 - непрозрачная, 0 - полностью прозрачная
+            esp.BoxFill.Thickness = 0
+        end
+    end
+
+    -- Линия
+    if SETTINGS.ShowLine then
+        esp.Line = Drawing.new("Line")
+        esp.Line.Visible = false
+        esp.Line.Color = SETTINGS.LineColor
+        esp.Line.Thickness = SETTINGS.LineThickness
+    end
+
+    -- Текст (расстояние)
+    if SETTINGS.ShowDistance then
+        esp.DistanceText = Drawing.new("Text")
+        esp.DistanceText.Visible = false
+        esp.DistanceText.Color = SETTINGS.DistanceColor
+        esp.DistanceText.Size = SETTINGS.DistanceSize
+        esp.DistanceText.Center = true
+        esp.DistanceText.Outline = true
+    end
+
+    -- Текст (имя)
+    if SETTINGS.ShowName then
+        esp.NameText = Drawing.new("Text")
+        esp.NameText.Visible = false
+        esp.NameText.Color = SETTINGS.NameColor
+        esp.NameText.Size = SETTINGS.NameSize
+        esp.NameText.Center = true
+        esp.NameText.Outline = true
+    end
+
+    -- Функция обновления позиций
+    local function update()
+        local character = player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        local head = character and character:FindFirstChild("Head")
+
+        -- Проверка команды
+        if SETTINGS.TeamCheck and player.Team == LocalPlayer.Team then
+            setVisible(esp, false)
+            return
+        end
+
+        if rootPart and head then
+            -- Позиция головы для более точного ббокса
+            local headPos = head.Position
+            local rootPos = rootPart.Position
+
+            -- Проверка дистанции
+            local distance = (Camera.CFrame.Position - rootPos).Magnitude
+            if distance > SETTINGS.MaxDistance then
+                setVisible(esp, false)
+                return
+            end
+
+            -- Верхняя и нижняя точки для рамки
+            local top = Camera:WorldToViewportPoint(headPos + Vector3.new(0, 0.5, 0))
+            local bottom = Camera:WorldToViewportPoint(rootPos - Vector3.new(0, 2, 0))
+
+            if top.OnScreen or bottom.OnScreen then
+                -- Рассчитываем размеры рамки
+                local height = math.abs(top.Y - bottom.Y)
+                local width = height * 0.7 -- Пропорционально
+                local x = top.X - width/2
+                local y = top.Y
+
+                -- Обновляем рамку
+                if esp.Box then
+                    esp.Box.Visible = true
+                    esp.Box.Size = Vector2.new(width, height)
+                    esp.Box.Position = Vector2.new(x, y)
+                    if esp.BoxFill then
+                        esp.BoxFill.Size = Vector2.new(width, height)
+                        esp.BoxFill.Position = Vector2.new(x, y)
+                        esp.BoxFill.Visible = true
+                    end
+                end
+
+                -- Линия от центра экрана
+                if esp.Line then
+                    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                    esp.Line.Visible = true
+                    esp.Line.From = screenCenter
+                    esp.Line.To = Vector2.new(top.X, bottom.Y)
+                end
+
+                -- Расстояние
+                if esp.DistanceText then
+                    esp.DistanceText.Visible = true
+                    esp.DistanceText.Text = string.format("%.0f м", distance)
+                    esp.DistanceText.Position = Vector2.new(top.X, bottom.Y + 5)
+                end
+
+                -- Имя
+                if esp.NameText then
+                    esp.NameText.Visible = true
+                    esp.NameText.Text = player.Name
+                    esp.NameText.Position = Vector2.new(top.X, top.Y - 20)
+                end
+            else
+                setVisible(esp, false)
+            end
+        else
+            setVisible(esp, false)
+        end
+    end
+
+    -- Подключение обновления
+    esp.Connection = RunService.RenderStepped:Connect(update)
+    playerESPs[player] = esp
+end
+
+-- Скрыть/показать все элементы
+function setVisible(esp, state)
+    for _, obj in pairs(esp) do
+        if type(obj) == "table" or (typeof(obj) == "Instance" and obj:IsA("Drawing")) then -- но это объекты Drawing
+            -- проверяем, что это Drawing объект
+            if obj.Visible ~= nil then
+                obj.Visible = state
+            end
+        end
+    end
+    if esp.BoxFill then esp.BoxFill.Visible = state end
+end
+
+-- Удаление ESP для игрока
+local function removeESP(player)
+    local esp = playerESPs[player]
+    if esp then
+        if esp.Connection then
+            esp.Connection:Disconnect()
+        end
+        for _, obj in pairs(esp) do
+            if type(obj) == "table" and obj.Remove then
+                obj:Remove()
+            end
+        end
+        playerESPs[player] = nil
+    end
+end
+
+-- Подключаем существующих игроков
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        createESP(player)
+    end
+end
+
+-- События подключения/отключения
+Players.PlayerAdded:Connect(function(player)
+    if player ~= LocalPlayer then
+        createESP(player)
+    end
+end)
+
+Players.PlayerRemoving:Connect(removeESP)
+
+-- Очистка при выходе (на всякий случай)
+game:GetService("Players").LocalPlayer.Chatted:Connect(function(msg)
+    if msg == "/clear" then
+        for _, esp in pairs(playerESPs) do
+            removeESP(_)
+        end
+    end
+end)
