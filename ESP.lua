@@ -1,5 +1,5 @@
--- // UltraMM2 v1.2 by UltraAI for Ultrakotik // --
--- Полный фикс: убраны причины ошибок, оптимизирован ESP, стабильные фичи
+-- // UltraMM2 v1.3 by UltraAI for Ultrakotik // --
+-- Фикс: ESP теперь отслеживает всех игроков постоянно, без застывания меток
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -39,7 +39,7 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- Функция определения роли без кэша (всегда актуально)
+-- Определение роли
 local function getRole(player)
     if not IsMM2 then return "Unknown" end
     local char = player.Character
@@ -55,7 +55,6 @@ local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
--- Объекты ESP для игроков
 local playerESPs = {}
 
 local function setVisible(esp, state)
@@ -107,8 +106,7 @@ local function createESP(player)
             setVisible(esp, false)
             return
         end
-        local camPos = Camera.CFrame.Position
-        local dist = (camPos - root.Position).Magnitude
+        local dist = (Camera.CFrame.Position - root.Position).Magnitude
         if dist > ESP.MaxDistance then
             setVisible(esp, false)
             return
@@ -116,13 +114,11 @@ local function createESP(player)
 
         local top, onScreen1 = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
         local bottom, onScreen2 = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
-        -- В некоторых версиях API WorldToViewportPoint возвращает два значения: Vector2 и bool
-        -- Поэтому мы используем переменные onScreen1/onScreen2
-        if not (onScreen1 ~= false and onScreen2 ~= false) then -- если false или nil, значит объект за экраном
-            setVisible(esp, false)
-            return
-        end
 
+        -- Всегда обновляем координаты, даже если объект за экраном
+        -- но видимость выставляем только если он на экране (хотя бы одна точка)
+        local onScreen = (onScreen1 or onScreen2)
+        
         local role = getRole(player)
         local color = getRoleColor(role)
         local height = math.abs(top.Y - bottom.Y)
@@ -131,14 +127,13 @@ local function createESP(player)
         local y = top.Y
 
         if esp.Box then
-            esp.Box.Visible = true
+            esp.Box.Visible = onScreen
             esp.Box.Size = Vector2.new(width, height)
             esp.Box.Position = Vector2.new(x, y)
             esp.Box.Color = color
         end
         if esp.Line then
-            esp.Line.Visible = true
-            -- Проверка ViewportSize на nil
+            esp.Line.Visible = onScreen
             local vpSize = Camera.ViewportSize
             if vpSize then
                 esp.Line.From = Vector2.new(vpSize.X/2, vpSize.Y)
@@ -149,19 +144,19 @@ local function createESP(player)
             esp.Line.Color = color
         end
         if esp.Dist then
-            esp.Dist.Visible = true
+            esp.Dist.Visible = onScreen
             esp.Dist.Text = string.format("%.0f м", dist)
             esp.Dist.Position = Vector2.new(top.X, bottom.Y + 5)
             esp.Dist.Color = color
         end
         if esp.Name then
-            esp.Name.Visible = true
+            esp.Name.Visible = onScreen
             esp.Name.Text = player.Name
             esp.Name.Position = Vector2.new(top.X, top.Y - 20)
             esp.Name.Color = Color3.new(1,1,1)
         end
         if esp.Role then
-            esp.Role.Visible = true
+            esp.Role.Visible = onScreen
             esp.Role.Text = role
             esp.Role.Position = Vector2.new(top.X, top.Y - 35)
             esp.Role.Color = color
@@ -172,7 +167,7 @@ local function createESP(player)
     playerESPs[player] = esp
 end
 
--- Инициализация ESP для всех игроков
+-- Инициализация
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
@@ -236,7 +231,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ====== AUTO PICKUP (упрощённый, событийный) ======
+-- ====== AUTO PICKUP ======
 if IsMM2 then
     LocalPlayer.CharacterAdded:Connect(function(char)
         local root = char:WaitForChild("HumanoidRootPart")
@@ -250,10 +245,7 @@ if IsMM2 then
                 end
             end
         end
-        -- Запускаем цикл только если включен авто-пикап
-        local conn; conn = RunService.Heartbeat:Connect(function()
-            scan()
-        end)
+        local conn; conn = RunService.Heartbeat:Connect(scan)
         char.Destroying:Connect(function() if conn then conn:Disconnect() end end)
     end)
 end
@@ -293,7 +285,7 @@ end
 -- ====== GUI ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v1.2"
+    screenGui.Name = "UltraMM2_GUI_v1.3"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -321,7 +313,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 20)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v1.2"
+    title.Text = "UltraMM2 v1.3"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 14
@@ -430,4 +422,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v1.2 загружен без ошибок!")
+print("UltraMM2 v1.3 готов — отслеживание без застываний!")
