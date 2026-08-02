@@ -1,5 +1,5 @@
--- // UltraMM2 v2.3 FINAL by UltraAI for Ultrakotik // --
--- Полная очистка и перезагрузка ESP при выходе игрока и начале раунда
+-- // UltraMM2 v2.4 by UltraAI for Ultrakotik // --
+-- ESP работает стабильно, метки не залипают
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -71,7 +71,6 @@ end
 -- ESP хранилище
 local playerESPs = {}
 
--- Скрыть все объекты ESP
 function setVisible(esp, state)
     for _, obj in pairs(esp) do
         if type(obj) == "table" and obj.Visible ~= nil then
@@ -80,7 +79,6 @@ function setVisible(esp, state)
     end
 end
 
--- Удалить ESP конкретного игрока
 function removeESP(player)
     local esp = playerESPs[player]
     if esp then
@@ -92,7 +90,6 @@ function removeESP(player)
     end
 end
 
--- Создать ESP для игрока
 function createESP(player)
     local esp = {}
     if ESP.ShowBox then
@@ -192,31 +189,17 @@ function createESP(player)
     playerESPs[player] = esp
 end
 
--- Полная перезагрузка всех ESP (очистка + создание для текущих игроков)
-local function rebuildAllESP()
-    -- Удаляем все метки
-    for player, esp in pairs(playerESPs) do
-        if esp then
-            setVisible(esp, false)
-            removeESP(player)
-        end
-    end
-    -- Создаём заново для всех, кроме себя
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            createESP(p)
-        end
-    end
-end
-
--- Сброс кэша и перезагрузка ESP при появлении персонажа
+-- Сброс кэша и скрытие метки при возрождении
 local function onCharacterAdded(player)
     roleCache[player] = nil
-    -- Перезагружаем все ESP, чтобы гарантированно не было старых меток
-    rebuildAllESP()
-
     local char = player.Character
     if not char then return end
+
+    -- Скрываем текущую метку, если она есть (чтобы не висела)
+    local esp = playerESPs[player]
+    if esp then
+        setVisible(esp, false)
+    end
 
     -- Поиск оружия с повторением
     local attempts = 0
@@ -253,7 +236,7 @@ local function onCharacterAdded(player)
     end)
 end
 
--- Подписки на всех игроков
+-- Подписки
 for _, p in pairs(Players:GetPlayers()) do
     p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
     if p.Character then onCharacterAdded(p) end
@@ -261,11 +244,13 @@ end
 Players.PlayerAdded:Connect(function(p)
     p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
     if p.Character then onCharacterAdded(p) end
+    -- Создаём ESP для нового игрока
+    if p ~= LocalPlayer then
+        createESP(p)
+    end
 end)
 Players.PlayerRemoving:Connect(function(p)
-    -- При выходе игрока полностью очищаем и пересоздаём ESP
-    -- Небольшая задержка, чтобы игрок точно был удалён из списка Players
-    delay(0.2, rebuildAllESP)
+    removeESP(p)
 end)
 
 -- Получение статуса
@@ -392,7 +377,7 @@ end
 -- ====== GUI ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.3"
+    screenGui.Name = "UltraMM2_GUI_v2.4"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -442,7 +427,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.3 FINAL"
+    title.Text = "UltraMM2 v2.4"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -592,4 +577,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v2.3 FINAL – метки сбрасываются при выходе игрока!")
+print("UltraMM2 v2.4 – ESP работает, метки не залипают. Погнали!")
