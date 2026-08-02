@@ -1,5 +1,5 @@
--- // UltraMM2 v3.0 FINAL by UltraAI for Ultrakotik // --
--- Исправлены: кнопка Refresh Roles, наблюдение, лишние метки
+-- // UltraMM2 v3.1 FINAL by UltraAI for Ultrakotik // --
+-- Исправлено: поиск оружия в Backpack, роли отображаются всегда
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -46,8 +46,10 @@ local FastKill = { Enabled = false }
 local roleCache = {}
 
 -- ==========================================
--- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ (тройной поиск)
+-- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ
 -- ==========================================
+
+-- Поиск StringValue в PlayerGui
 local function findRoleInGui(player)
     local gui = player:FindFirstChild("PlayerGui")
     if not gui then return nil end
@@ -72,6 +74,7 @@ local function findRoleInGui(player)
     return nil
 end
 
+-- Поиск атрибута
 local function findRoleByAttribute(player)
     local role = player:GetAttribute("Role")
     if role then
@@ -84,6 +87,7 @@ local function findRoleByAttribute(player)
     return nil
 end
 
+-- Поиск оружия в объекте (персонаж или Backpack)
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -97,12 +101,22 @@ local function findWeaponTool(obj, weaponNames)
     return nil
 end
 
+-- Поиск оружия в персонаже И в Backpack
 local function detectRoleByWeapons(player)
+    -- Проверяем персонаж
     local char = player.Character
-    if not char then return nil end
-    local weapon = findWeaponTool(char, {"Knife", "KnifeHandle", "Pistol", "Revolver"})
-    if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
-    if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
+    if char then
+        local weapon = findWeaponTool(char, {"Knife", "KnifeHandle", "Pistol", "Revolver"})
+        if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
+        if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
+    end
+    -- Проверяем Backpack
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        local weapon = findWeaponTool(backpack, {"Knife", "KnifeHandle", "Pistol", "Revolver"})
+        if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
+        if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
+    end
     return nil
 end
 
@@ -136,7 +150,7 @@ local function getRoleColor(role)
 end
 
 -- ==========================================
--- ESP ХРАНИЛИЩЕ (с защитой от утечек)
+-- ESP ХРАНИЛИЩЕ
 -- ==========================================
 local playerESPs = {}
 
@@ -159,18 +173,15 @@ function removeESP(player)
     end
 end
 
--- Полная очистка и пересоздание всех ESP (используется при выходе из наблюдения)
+-- Полная очистка и пересоздание всех ESP
 local function rebuildAllESP()
-    -- Сначала отключаем и удаляем все существующие метки
     for player, esp in pairs(playerESPs) do
         if esp then
             setVisible(esp, false)
             removeESP(player)
         end
     end
-    -- Ждём один кадр, чтобы объекты точно удалились
     RunService.RenderStepped:Wait()
-    -- Создаём заново для всех живых игроков
     local count = 0
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
@@ -182,7 +193,6 @@ local function rebuildAllESP()
 end
 
 function createESP(player)
-    -- Если для этого игрока уже есть ESP, удаляем старую
     if playerESPs[player] then
         removeESP(player)
     end
@@ -286,21 +296,20 @@ function createESP(player)
 end
 
 -- ==========================================
--- ОБРАБОТЧИКИ ИГРОКОВ (непрерывное сканирование ролей)
+-- ОБРАБОТЧИКИ ИГРОКОВ
 -- ==========================================
 local function onCharacterAdded(player)
     roleCache[player] = nil
     local char = player.Character
     if not char then return end
 
-    -- Скрываем старую метку (если была)
     local esp = playerESPs[player]
     if esp then setVisible(esp, false) end
 
     -- Немедленная попытка определить роль
     updatePlayerRole(player)
 
-    -- Непрерывное сканирование каждые 0.3 сек, пока роль не определится
+    -- Непрерывное сканирование, пока роль не определена
     local scanAttempts = 0
     local scanConn
     scanConn = RunService.Heartbeat:Connect(function()
@@ -318,19 +327,31 @@ local function onCharacterAdded(player)
         end
     end)
 
-    -- Переопределение при подборе/выбросе оружия
-    char.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") then
+    -- Слушатели на появление оружия в персонаже И в Backpack
+    local function onToolAdded(tool)
+        if tool:IsA("Tool") then
             roleCache[player] = nil
             updatePlayerRole(player)
         end
-    end)
+    end
+    char.ChildAdded:Connect(onToolAdded)
     char.ChildRemoved:Connect(function(child)
         if child:IsA("Tool") then
             roleCache[player] = nil
             updatePlayerRole(player)
         end
     end)
+
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        backpack.ChildAdded:Connect(onToolAdded)
+    else
+        player.ChildAdded:Connect(function(child)
+            if child.Name == "Backpack" then
+                child.ChildAdded:Connect(onToolAdded)
+            end
+        end)
+    end
 
     -- Смерть
     local hum = char:WaitForChild("Humanoid")
@@ -343,7 +364,7 @@ local function onCharacterAdded(player)
     end)
 end
 
--- Подписки на всех игроков
+-- Подписки
 for _, p in pairs(Players:GetPlayers()) do
     p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
     if p.Character then onCharacterAdded(p) end
@@ -355,19 +376,12 @@ Players.PlayerAdded:Connect(function(p)
 end)
 Players.PlayerRemoving:Connect(removeESP)
 
--- Очистка при смерти локального игрока (вход в наблюдение)
+-- Очистка при смерти и возрождении
 LocalPlayer.CharacterAdded:Connect(function(char)
-    -- Подключаемся к смерти каждого нового персонажа
     local hum = char:WaitForChild("Humanoid")
     hum.Died:Connect(function()
-        print("[UltraMM2] Локальный игрок умер, очищаем ESP.")
         rebuildAllESP()
     end)
-end)
-
--- Очистка и перезагрузка при возрождении (выход из наблюдения)
-LocalPlayer.CharacterAdded:Connect(function()
-    -- Небольшая задержка, чтобы персонаж успел загрузиться
     task.wait(0.5)
     rebuildAllESP()
 end)
@@ -378,7 +392,7 @@ for _, p in pairs(Players:GetPlayers()) do
 end
 
 -- ==========================================
--- AIMBOT
+-- AIMBOT (без изменений)
 -- ==========================================
 local fovCircle = Drawing.new("Circle")
 fovCircle.Visible = false; fovCircle.Radius = Aimbot.FOVRadius; fovCircle.Color = Color3.fromRGB(255,255,0)
@@ -481,11 +495,11 @@ if IsMM2 then
 end
 
 -- ==========================================
--- GUI (компактный, кнопка Refresh Roles сверху)
+-- GUI (кнопка Refresh Roles над вкладками)
 -- ==========================================
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v3.0"
+    screenGui.Name = "UltraMM2_GUI_v3.1"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -535,14 +549,14 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v3.0 FINAL"
+    title.Text = "UltraMM2 v3.1 FINAL"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
     title.BorderSizePixel = 0
     title.Parent = panel
 
-    -- Кнопка Refresh Roles (всегда видна над вкладками)
+    -- Кнопка Refresh Roles
     local refreshBtn = Instance.new("TextButton")
     refreshBtn.Size = UDim2.new(1, -16, 0, 26)
     refreshBtn.Position = UDim2.new(0, 8, 0, 30)
@@ -710,4 +724,4 @@ end
 
 createGUI()
 
-print("[UltraMM2] v3.0 FINAL загружен — всё работает идеально!")
+print("[UltraMM2] v3.1 FINAL загружен — роли определяются из Backpack!")
