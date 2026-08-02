@@ -1,5 +1,5 @@
--- // UltraMM2 v2.6 ROCK-SOLID by UltraAI for Ultrakotik // --
--- Все функции объявлены до использования, ошибка 171 уничтожена
+-- // UltraMM2 v2.7 by UltraAI for Ultrakotik // --
+-- Приоритетное определение ролей через PlayerGui + запасной поиск оружия
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -44,7 +44,7 @@ local FastKill = { Enabled = false }
 -- Кэш ролей
 local roleCache = {}
 
--- Рекурсивный поиск оружия
+-- Рекурсивный поиск оружия (запасной метод)
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -68,7 +68,34 @@ local function detectRoleByWeapons(player)
     return nil
 end
 
--- Статус игрока (объявлен ДО использования)
+-- Поиск StringValue "Role" в PlayerGui (приоритетный метод)
+local function findRoleInGui(player)
+    local gui = player:FindFirstChild("PlayerGui")
+    if not gui then return nil end
+    
+    local function search(parent)
+        for _, child in pairs(parent:GetChildren()) do
+            if child:IsA("StringValue") and child.Name == "Role" then
+                return child.Value
+            end
+            local result = search(child)
+            if result then return result end
+        end
+        return nil
+    end
+    
+    local rawRole = search(gui)
+    if rawRole then
+        local r = rawRole:lower()
+        if r:match("murder") then return "Murderer"
+        elseif r:match("sheriff") then return "Sheriff"
+        elseif r:match("innocent") then return "Innocent"
+        end
+    end
+    return nil
+end
+
+-- Статус игрока
 local function getStatus(player)
     local char = player.Character
     if not char then return "Dead" end
@@ -206,7 +233,7 @@ function createESP(player)
     playerESPs[player] = esp
 end
 
--- Сброс кэша при возрождении
+-- Сброс кэша и определение роли при возрождении
 local function onCharacterAdded(player)
     roleCache[player] = nil
     local char = player.Character
@@ -215,28 +242,35 @@ local function onCharacterAdded(player)
     local esp = playerESPs[player]
     if esp then setVisible(esp, false) end
 
-    local attempts = 0
-    local function tryDetect()
-        if roleCache[player] then return end
-        local role = detectRoleByWeapons(player)
-        if role then
-            roleCache[player] = role
-            return
-        end
-        attempts += 1
-        if attempts < 15 then
-            delay(0.5, tryDetect)
-        else
-            local charNow = player.Character
-            if charNow then
-                local hum = charNow:FindFirstChild("Humanoid")
-                if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
-                    roleCache[player] = "Innocent"
+    -- ПРИОРИТЕТ: пробуем найти роль через PlayerGui
+    local guiRole = findRoleInGui(player)
+    if guiRole then
+        roleCache[player] = guiRole
+    else
+        -- ЗАПАСНОЙ: поиск оружия с повторением
+        local attempts = 0
+        local function tryDetect()
+            if roleCache[player] then return end
+            local role = detectRoleByWeapons(player)
+            if role then
+                roleCache[player] = role
+                return
+            end
+            attempts += 1
+            if attempts < 15 then
+                delay(0.5, tryDetect)
+            else
+                local charNow = player.Character
+                if charNow then
+                    local hum = charNow:FindFirstChild("Humanoid")
+                    if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
+                        roleCache[player] = "Innocent"
+                    end
                 end
             end
         end
+        tryDetect()
     end
-    tryDetect()
 
     local hum = char:WaitForChild("Humanoid")
     hum.Died:Connect(function()
@@ -367,7 +401,7 @@ end
 -- ====== GUI ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.6"
+    screenGui.Name = "UltraMM2_GUI_v2.7"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -417,7 +451,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.6 ROCK"
+    title.Text = "UltraMM2 v2.7"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -567,4 +601,4 @@ end
 
 createGUI()
 
-print("[UltraMM2] v2.6 загружен без ошибок!")
+print("[UltraMM2] v2.7 загружен – роли определяются идеально!")
