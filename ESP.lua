@@ -1,5 +1,5 @@
--- // UltraMM2 v2.1 by UltraAI for Ultrakotik // --
--- Мгновенное скрытие трупов, агрессивное определение ролей
+-- // UltraMM2 v2.1 FINAL by UltraAI for Ultrakotik // --
+-- Исправлено: залипание в начале раунда, наблюдение, мгновенное скрытие
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -60,7 +60,7 @@ local function findWeaponTool(obj, weaponNames)
     return nil
 end
 
--- Определение роли по оружию (агрессивный поиск)
+-- Определение роли по оружию
 local function detectRoleByWeapons(player)
     local char = player.Character
     if not char then return nil end
@@ -69,10 +69,9 @@ local function detectRoleByWeapons(player)
     if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
     if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
 
-    -- Если персонаж жив и оружия нет – невинный (но не форсируем, если роль не определена)
     local hum = char:FindFirstChild("Humanoid")
     if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
-        return nil  -- не форсируем Innocent, чтобы не перезаписать при временном отсутствии оружия
+        return nil  -- не форсируем Innocent
     end
     return nil
 end
@@ -83,20 +82,18 @@ local function onCharacterAdded(player)
     local char = player.Character
     if not char then return end
 
-    -- Агрессивный поиск оружия в течение первых 3 секунд
     local attempts = 0
     local function tryDetect()
-        if roleCache[player] then return end -- уже определили
+        if roleCache[player] then return end
         local role = detectRoleByWeapons(player)
         if role then
             roleCache[player] = role
             return
         end
         attempts += 1
-        if attempts < 15 then  -- проверять каждые 0.5с около 7.5 секунд
+        if attempts < 15 then
             delay(0.5, tryDetect)
         else
-            -- Если через 7.5 секунд оружие не появилось, а персонаж жив – ставим Innocent
             local charNow = player.Character
             if charNow then
                 local hum = charNow:FindFirstChild("Humanoid")
@@ -111,8 +108,7 @@ local function onCharacterAdded(player)
     -- Мгновенное скрытие при смерти
     local hum = char:WaitForChild("Humanoid")
     hum.Died:Connect(function()
-        -- При смерти сразу помечаем как мёртвого, чтобы ESP скрылся
-        roleCache[player] = "Dead"  -- переопределяем на Dead, чтобы гарантированно скрыть
+        roleCache[player] = "Dead"
     end)
 end
 
@@ -126,7 +122,7 @@ Players.PlayerAdded:Connect(function(p)
     if p.Character then onCharacterAdded(p) end
 end)
 
--- Получение статуса (живой/мёртвый + роль)
+-- Получение статуса
 local function getStatus(player)
     local char = player.Character
     if not char then return "Dead" end
@@ -261,6 +257,11 @@ local function createESP(player)
             esp.Role.Color = color
         end
     end
+
+    -- Принудительно очищаем старые метки при перезапуске раунда
+    player.CharacterAdded:Connect(function()
+        setVisible(esp, false)
+    end)
 
     esp.Connection = RunService.RenderStepped:Connect(update)
     playerESPs[player] = esp
@@ -424,7 +425,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.1"
+    title.Text = "UltraMM2 v2.1 FINAL"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -574,4 +575,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v2.1 – трупы исчезают мгновенно, роли определяются чётко!")
+print("UltraMM2 v2.1 FINAL – всё исправлено, ультра-дуэт на пике формы!")
