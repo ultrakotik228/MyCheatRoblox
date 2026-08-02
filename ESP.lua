@@ -1,7 +1,5 @@
--- // UltraMM2 v2.5 STABLE by UltraAI // --
--- Гарантированный запуск ESP и ролей в MM2
-
-print("[UltraMM2] Скрипт начал загрузку...")
+-- // UltraMM2 v2.6 ROCK-SOLID by UltraAI for Ultrakotik // --
+-- Все функции объявлены до использования, ошибка 171 уничтожена
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -11,7 +9,6 @@ local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
 local IsMM2 = (workspace:FindFirstChild("GameFolder") ~= nil)
-print("[UltraMM2] MM2 определена:", IsMM2)
 
 -- Настройки
 local ESP = {
@@ -47,7 +44,7 @@ local FastKill = { Enabled = false }
 -- Кэш ролей
 local roleCache = {}
 
--- Рекурсивный поиск оружия (без изменений)
+-- Рекурсивный поиск оружия
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -61,7 +58,7 @@ local function findWeaponTool(obj, weaponNames)
     return nil
 end
 
--- Определение роли по оружию (без изменений)
+-- Определение роли по оружию
 local function detectRoleByWeapons(player)
     local char = player.Character
     if not char then return nil end
@@ -69,6 +66,23 @@ local function detectRoleByWeapons(player)
     if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
     if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
     return nil
+end
+
+-- Статус игрока (объявлен ДО использования)
+local function getStatus(player)
+    local char = player.Character
+    if not char then return "Dead" end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+            return "Dead"
+        end
+    end
+    return roleCache[player] or "Unknown"
+end
+
+local function getRoleColor(role)
+    return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
 -- ESP хранилище
@@ -94,7 +108,6 @@ function removeESP(player)
 end
 
 function createESP(player)
-    warn("[UltraMM2] Создаю ESP для", player.Name)
     local esp = {}
     if ESP.ShowBox then
         esp.Box = Drawing.new("Square"); esp.Box.Visible = false; esp.Box.Thickness = 2; esp.Box.Filled = false
@@ -193,25 +206,21 @@ function createESP(player)
     playerESPs[player] = esp
 end
 
--- Сброс кэша и поиск роли при возрождении
+-- Сброс кэша при возрождении
 local function onCharacterAdded(player)
-    warn("[UltraMM2] Персонаж добавлен для", player.Name)
     roleCache[player] = nil
     local char = player.Character
     if not char then return end
 
-    -- Скрываем старую метку, если есть
     local esp = playerESPs[player]
     if esp then setVisible(esp, false) end
 
-    -- Поиск оружия
     local attempts = 0
     local function tryDetect()
         if roleCache[player] then return end
         local role = detectRoleByWeapons(player)
         if role then
             roleCache[player] = role
-            warn("[UltraMM2] Роль", player.Name, ":", role)
             return
         end
         attempts += 1
@@ -229,7 +238,6 @@ local function onCharacterAdded(player)
     end
     tryDetect()
 
-    -- Скрытие при смерти
     local hum = char:WaitForChild("Humanoid")
     hum.Died:Connect(function()
         roleCache[player] = "Dead"
@@ -250,30 +258,9 @@ Players.PlayerAdded:Connect(function(p)
     if p.Character then onCharacterAdded(p) end
     if p ~= LocalPlayer then createESP(p) end
 end)
-Players.PlayerRemoving:Connect(function(p)
-    warn("[UltraMM2] Игрок вышел:", p.Name)
-    removeESP(p)
-end)
-
--- Получение статуса
-local function getStatus(player)
-    local char = player.Character
-    if not char then return "Dead" end
-    local hum = char:FindFirstChild("Humanoid")
-    if hum then
-        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
-            return "Dead"
-        end
-    end
-    return roleCache[player] or "Unknown"
-end
-
-local function getRoleColor(role)
-    return ESP.Colors[role] or Color3.new(1,1,1)
-end
+Players.PlayerRemoving:Connect(removeESP)
 
 -- Первоначальное создание ESP
-print("[UltraMM2] Создаю ESP для всех игроков...")
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
@@ -379,9 +366,8 @@ end
 
 -- ====== GUI ======
 local function createGUI()
-    print("[UltraMM2] Создаю GUI...")
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.5"
+    screenGui.Name = "UltraMM2_GUI_v2.6"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -431,7 +417,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.5 STABLE"
+    title.Text = "UltraMM2 v2.6 ROCK"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -577,8 +563,8 @@ local function createGUI()
             togglePanel()
         end
     end)
-    print("[UltraMM2] GUI создан.")
 end
 
 createGUI()
-print("[UltraMM2] UltraMM2 v2.5 STABLE загружен и работает!")
+
+print("[UltraMM2] v2.6 загружен без ошибок!")
