@@ -1,5 +1,5 @@
--- // UltraMM2 v2.0 by UltraAI for Ultrakotik // --
--- Определение ролей по инвентарю (оружию) – 100% точность
+-- // UltraMM2 v2.1 by UltraAI for Ultrakotik // --
+-- Мгновенное скрытие трупов, агрессивное определение ролей
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -18,7 +18,7 @@ local ESP = {
     ShowDistance = true,
     ShowName = true,
     ShowRole = true,
-    ShowDead = false,
+    ShowDead = false,   -- если false, мёртвые игроки полностью исчезают с ESP
     MaxDistance = 2000,
     Colors = {
         Murderer = Color3.fromRGB(255, 0, 0),
@@ -41,74 +41,101 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- Кэш ролей (обновляется при обнаружении оружия)
+-- Кэш ролей (обновляется при возрождении)
 local roleCache = {}
 
--- ==========================================
--- НОВЫЙ МЕХАНИЗМ: определение роли по оружию в инвентаре
--- ==========================================
-local function detectRoleByWeapons(player)
-    local char = player.Character
-    if not char then return nil end
-
-    -- Ищем оружие в персонаже
-    local knife = char:FindFirstChild("Knife") or char:FindFirstChild("KnifeHandle")
-    local gun = char:FindFirstChild("Pistol") or char:FindFirstChild("Revolver")
-
-    if knife then return "Murderer" end
-    if gun then return "Sheriff" end
-    -- Если оружия нет, но персонаж жив – невинный
-    local hum = char:FindFirstChild("Humanoid")
-    if hum and hum.Health > 0 then
-        return "Innocent"
+-- Рекурсивный поиск оружия в объекте
+local function findWeaponTool(obj, weaponNames)
+    for _, child in pairs(obj:GetChildren()) do
+        if child:IsA("Tool") then
+            for _, name in ipairs(weaponNames) do
+                if child.Name == name then
+                    return name
+                end
+            end
+        end
+        local result = findWeaponTool(child, weaponNames)
+        if result then return result end
     end
     return nil
 end
 
--- Подписка на появление оружия у персонажа
-local function watchPlayerWeapons(player)
-    local function onCharacterAdded(char)
-        -- Очищаем кэш роли при новом персонаже
-        roleCache[player] = nil
+-- Определение роли по оружию (агрессивный поиск)
+local function detectRoleByWeapons(player)
+    local char = player.Character
+    if not char then return nil end
 
-        -- Проверяем, есть ли оружие уже сейчас (на случай, если персонаж загрузился с оружием)
+    local weapon = findWeaponTool(char, {"Knife", "KnifeHandle", "Pistol", "Revolver"})
+    if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
+    if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
+
+    -- Если персонаж жив и оружия нет – невинный (но не форсируем, если роль не определена)
+    local hum = char:FindFirstChild("Humanoid")
+    if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
+        return nil  -- не форсируем Innocent, чтобы не перезаписать при временном отсутствии оружия
+    end
+    return nil
+end
+
+-- Сброс кэша при новом персонаже
+local function onCharacterAdded(player)
+    roleCache[player] = nil
+    local char = player.Character
+    if not char then return end
+
+    -- Агрессивный поиск оружия в течение первых 3 секунд
+    local attempts = 0
+    local function tryDetect()
+        if roleCache[player] then return end -- уже определили
         local role = detectRoleByWeapons(player)
         if role then
             roleCache[player] = role
+            return
         end
-
-        -- Следим за добавлением детей в персонажа – если появится оружие, сразу определим роль
-        char.ChildAdded:Connect(function(child)
-            if roleCache[player] then return end -- роль уже известна
-            if child.Name == "Knife" or child.Name == "KnifeHandle" then
-                roleCache[player] = "Murderer"
-            elseif child.Name == "Pistol" or child.Name == "Revolver" then
-                roleCache[player] = "Sheriff"
+        attempts += 1
+        if attempts < 15 then  -- проверять каждые 0.5с около 7.5 секунд
+            delay(0.5, tryDetect)
+        else
+            -- Если через 7.5 секунд оружие не появилось, а персонаж жив – ставим Innocent
+            local charNow = player.Character
+            if charNow then
+                local hum = charNow:FindFirstChild("Humanoid")
+                if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
+                    roleCache[player] = "Innocent"
+                end
             end
-        end)
+        end
     end
+    tryDetect()
 
-    player.CharacterAdded:Connect(onCharacterAdded)
-    if player.Character then
-        onCharacterAdded(player.Character)
-    end
+    -- Мгновенное скрытие при смерти
+    local hum = char:WaitForChild("Humanoid")
+    hum.Died:Connect(function()
+        -- При смерти сразу помечаем как мёртвого, чтобы ESP скрылся
+        roleCache[player] = "Dead"  -- переопределяем на Dead, чтобы гарантированно скрыть
+    end)
 end
 
--- Перехватываем всех текущих и будущих игроков
+-- Подписка на всех игроков
 for _, p in pairs(Players:GetPlayers()) do
-    watchPlayerWeapons(p)
+    p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
+    if p.Character then onCharacterAdded(p) end
 end
-Players.PlayerAdded:Connect(watchPlayerWeapons)
+Players.PlayerAdded:Connect(function(p)
+    p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
+    if p.Character then onCharacterAdded(p) end
+end)
 
--- Функция статуса игрока (живой/мёртвый + роль)
+-- Получение статуса (живой/мёртвый + роль)
 local function getStatus(player)
-    -- Мёртв ли?
     local char = player.Character
     if not char then return "Dead" end
     local hum = char:FindFirstChild("Humanoid")
-    if hum and hum.Health <= 0 then return "Dead" end
-
-    -- Берём роль из кэша
+    if hum then
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+            return "Dead"
+        end
+    end
     return roleCache[player] or "Unknown"
 end
 
@@ -116,9 +143,7 @@ local function getRoleColor(role)
     return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
--- ==========================================
--- ESP (без изменений, стабильная часть)
--- ==========================================
+-- ESP хранилище
 local playerESPs = {}
 
 local function setVisible(esp, state)
@@ -165,14 +190,19 @@ local function createESP(player)
         end
 
         local status = getStatus(player)
+        -- Если игрок мёртв и показ мёртвых выключен – полностью скрываем всё
         if status == "Dead" and not ESP.ShowDead then
             setVisible(esp, false)
             return
         end
 
         local char = player.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        local head = char and char:FindFirstChild("Head")
+        if not char then
+            setVisible(esp, false)
+            return
+        end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local head = char:FindFirstChild("Head")
         if not (root and head) then
             setVisible(esp, false)
             return
@@ -226,7 +256,7 @@ local function createESP(player)
         end
         if esp.Role then
             esp.Role.Visible = onScreen and ESP.ShowRole
-            esp.Role.Text = status
+            esp.Role.Text = status == "Dead" and "Dead" or (roleCache[player] or "Unknown")
             esp.Role.Position = Vector2.new(top.X, top.Y - 35)
             esp.Role.Color = color
         end
@@ -341,14 +371,13 @@ if IsMM2 then
     end)
 end
 
--- ====== УЛУЧШЕННЫЙ GUI (центральная кнопка, анимации) ======
+-- ====== GUI (центральная кнопка, анимации) ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.0"
+    screenGui.Name = "UltraMM2_GUI_v2.1"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
-    -- Центральная красная кнопка
     local icon = Instance.new("TextButton")
     icon.Size = UDim2.new(0, 40, 0, 40)
     icon.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -367,7 +396,6 @@ local function createGUI()
     corner.CornerRadius = UDim.new(1, 0)
     corner.Parent = icon
 
-    -- Панель (по центру, скрыта)
     local panel = Instance.new("Frame")
     panel.Size = UDim2.new(0, 240, 0, 300)
     panel.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -396,7 +424,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.0"
+    title.Text = "UltraMM2 v2.1"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -546,4 +574,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v2.0 – определение ролей по оружию активировано!")
+print("UltraMM2 v2.1 – трупы исчезают мгновенно, роли определяются чётко!")
