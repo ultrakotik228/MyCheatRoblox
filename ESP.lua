@@ -1,5 +1,5 @@
--- // UltraMM2 v2.1 FINAL by UltraAI for Ultrakotik // --
--- Исправлено: залипание в начале раунда, наблюдение, мгновенное скрытие
+-- // UltraMM2 v2.3 FINAL by UltraAI for Ultrakotik // --
+-- Полная очистка и перезагрузка ESP при выходе игрока и начале раунда
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -18,7 +18,7 @@ local ESP = {
     ShowDistance = true,
     ShowName = true,
     ShowRole = true,
-    ShowDead = false,   -- если false, мёртвые игроки полностью исчезают с ESP
+    ShowDead = false,
     MaxDistance = 2000,
     Colors = {
         Murderer = Color3.fromRGB(255, 0, 0),
@@ -41,17 +41,15 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- Кэш ролей (обновляется при возрождении)
+-- Кэш ролей
 local roleCache = {}
 
--- Рекурсивный поиск оружия в объекте
+-- Рекурсивный поиск оружия
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
             for _, name in ipairs(weaponNames) do
-                if child.Name == name then
-                    return name
-                end
+                if child.Name == name then return name end
             end
         end
         local result = findWeaponTool(child, weaponNames)
@@ -64,85 +62,17 @@ end
 local function detectRoleByWeapons(player)
     local char = player.Character
     if not char then return nil end
-
     local weapon = findWeaponTool(char, {"Knife", "KnifeHandle", "Pistol", "Revolver"})
     if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
     if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
-
-    local hum = char:FindFirstChild("Humanoid")
-    if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
-        return nil  -- не форсируем Innocent
-    end
     return nil
-end
-
--- Сброс кэша при новом персонаже
-local function onCharacterAdded(player)
-    roleCache[player] = nil
-    local char = player.Character
-    if not char then return end
-
-    local attempts = 0
-    local function tryDetect()
-        if roleCache[player] then return end
-        local role = detectRoleByWeapons(player)
-        if role then
-            roleCache[player] = role
-            return
-        end
-        attempts += 1
-        if attempts < 15 then
-            delay(0.5, tryDetect)
-        else
-            local charNow = player.Character
-            if charNow then
-                local hum = charNow:FindFirstChild("Humanoid")
-                if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
-                    roleCache[player] = "Innocent"
-                end
-            end
-        end
-    end
-    tryDetect()
-
-    -- Мгновенное скрытие при смерти
-    local hum = char:WaitForChild("Humanoid")
-    hum.Died:Connect(function()
-        roleCache[player] = "Dead"
-    end)
-end
-
--- Подписка на всех игроков
-for _, p in pairs(Players:GetPlayers()) do
-    p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
-    if p.Character then onCharacterAdded(p) end
-end
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
-    if p.Character then onCharacterAdded(p) end
-end)
-
--- Получение статуса
-local function getStatus(player)
-    local char = player.Character
-    if not char then return "Dead" end
-    local hum = char:FindFirstChild("Humanoid")
-    if hum then
-        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
-            return "Dead"
-        end
-    end
-    return roleCache[player] or "Unknown"
-end
-
-local function getRoleColor(role)
-    return ESP.Colors[role] or Color3.new(1,1,1)
 end
 
 -- ESP хранилище
 local playerESPs = {}
 
-local function setVisible(esp, state)
+-- Скрыть все объекты ESP
+function setVisible(esp, state)
     for _, obj in pairs(esp) do
         if type(obj) == "table" and obj.Visible ~= nil then
             obj.Visible = state
@@ -150,7 +80,8 @@ local function setVisible(esp, state)
     end
 end
 
-local function removeESP(player)
+-- Удалить ESP конкретного игрока
+function removeESP(player)
     local esp = playerESPs[player]
     if esp then
         if esp.Connection then esp.Connection:Disconnect() end
@@ -161,7 +92,8 @@ local function removeESP(player)
     end
 end
 
-local function createESP(player)
+-- Создать ESP для игрока
+function createESP(player)
     local esp = {}
     if ESP.ShowBox then
         esp.Box = Drawing.new("Square"); esp.Box.Visible = false; esp.Box.Thickness = 2; esp.Box.Filled = false
@@ -186,7 +118,6 @@ local function createESP(player)
         end
 
         local status = getStatus(player)
-        -- Если игрок мёртв и показ мёртвых выключен – полностью скрываем всё
         if status == "Dead" and not ESP.ShowDead then
             setVisible(esp, false)
             return
@@ -212,7 +143,6 @@ local function createESP(player)
 
         local top, onScreen1 = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
         local bottom, onScreen2 = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,2,0))
-
         local onScreen = (onScreen1 or onScreen2)
         local color = getRoleColor(status)
 
@@ -258,20 +188,107 @@ local function createESP(player)
         end
     end
 
-    -- Принудительно очищаем старые метки при перезапуске раунда
-    player.CharacterAdded:Connect(function()
-        setVisible(esp, false)
-    end)
-
     esp.Connection = RunService.RenderStepped:Connect(update)
     playerESPs[player] = esp
 end
 
+-- Полная перезагрузка всех ESP (очистка + создание для текущих игроков)
+local function rebuildAllESP()
+    -- Удаляем все метки
+    for player, esp in pairs(playerESPs) do
+        if esp then
+            setVisible(esp, false)
+            removeESP(player)
+        end
+    end
+    -- Создаём заново для всех, кроме себя
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            createESP(p)
+        end
+    end
+end
+
+-- Сброс кэша и перезагрузка ESP при появлении персонажа
+local function onCharacterAdded(player)
+    roleCache[player] = nil
+    -- Перезагружаем все ESP, чтобы гарантированно не было старых меток
+    rebuildAllESP()
+
+    local char = player.Character
+    if not char then return end
+
+    -- Поиск оружия с повторением
+    local attempts = 0
+    local function tryDetect()
+        if roleCache[player] then return end
+        local role = detectRoleByWeapons(player)
+        if role then
+            roleCache[player] = role
+            return
+        end
+        attempts += 1
+        if attempts < 15 then
+            delay(0.5, tryDetect)
+        else
+            local charNow = player.Character
+            if charNow then
+                local hum = charNow:FindFirstChild("Humanoid")
+                if hum and hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead then
+                    roleCache[player] = "Innocent"
+                end
+            end
+        end
+    end
+    tryDetect()
+
+    -- Мгновенное скрытие при смерти
+    local hum = char:WaitForChild("Humanoid")
+    hum.Died:Connect(function()
+        roleCache[player] = "Dead"
+        local esp = playerESPs[player]
+        if esp and not ESP.ShowDead then
+            setVisible(esp, false)
+        end
+    end)
+end
+
+-- Подписки на всех игроков
+for _, p in pairs(Players:GetPlayers()) do
+    p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
+    if p.Character then onCharacterAdded(p) end
+end
+Players.PlayerAdded:Connect(function(p)
+    p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
+    if p.Character then onCharacterAdded(p) end
+end)
+Players.PlayerRemoving:Connect(function(p)
+    -- При выходе игрока полностью очищаем и пересоздаём ESP
+    -- Небольшая задержка, чтобы игрок точно был удалён из списка Players
+    delay(0.2, rebuildAllESP)
+end)
+
+-- Получение статуса
+local function getStatus(player)
+    local char = player.Character
+    if not char then return "Dead" end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+            return "Dead"
+        end
+    end
+    return roleCache[player] or "Unknown"
+end
+
+local function getRoleColor(role)
+    return ESP.Colors[role] or Color3.new(1,1,1)
+end
+
+-- Первоначальное создание ESP
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
-Players.PlayerAdded:Connect(function(p) if p ~= LocalPlayer then createESP(p) end end)
-Players.PlayerRemoving:Connect(removeESP)
 
 -- ====== AIMBOT ======
 local fovCircle = Drawing.new("Circle")
@@ -372,10 +389,10 @@ if IsMM2 then
     end)
 end
 
--- ====== GUI (центральная кнопка, анимации) ======
+-- ====== GUI ======
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.1"
+    screenGui.Name = "UltraMM2_GUI_v2.3"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -425,7 +442,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.1 FINAL"
+    title.Text = "UltraMM2 v2.3 FINAL"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -575,4 +592,4 @@ end
 
 createGUI()
 
-print("UltraMM2 v2.1 FINAL – всё исправлено, ультра-дуэт на пике формы!")
+print("UltraMM2 v2.3 FINAL – метки сбрасываются при выходе игрока!")
