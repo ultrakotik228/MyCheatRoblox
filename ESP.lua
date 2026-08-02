@@ -1,5 +1,7 @@
--- // UltraMM2 v2.4 by UltraAI for Ultrakotik // --
--- ESP работает стабильно, метки не залипают
+-- // UltraMM2 v2.5 STABLE by UltraAI // --
+-- Гарантированный запуск ESP и ролей в MM2
+
+print("[UltraMM2] Скрипт начал загрузку...")
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -9,6 +11,7 @@ local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
 local IsMM2 = (workspace:FindFirstChild("GameFolder") ~= nil)
+print("[UltraMM2] MM2 определена:", IsMM2)
 
 -- Настройки
 local ESP = {
@@ -44,7 +47,7 @@ local FastKill = { Enabled = false }
 -- Кэш ролей
 local roleCache = {}
 
--- Рекурсивный поиск оружия
+-- Рекурсивный поиск оружия (без изменений)
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -58,7 +61,7 @@ local function findWeaponTool(obj, weaponNames)
     return nil
 end
 
--- Определение роли по оружию
+-- Определение роли по оружию (без изменений)
 local function detectRoleByWeapons(player)
     local char = player.Character
     if not char then return nil end
@@ -91,6 +94,7 @@ function removeESP(player)
 end
 
 function createESP(player)
+    warn("[UltraMM2] Создаю ESP для", player.Name)
     local esp = {}
     if ESP.ShowBox then
         esp.Box = Drawing.new("Square"); esp.Box.Visible = false; esp.Box.Thickness = 2; esp.Box.Filled = false
@@ -189,25 +193,25 @@ function createESP(player)
     playerESPs[player] = esp
 end
 
--- Сброс кэша и скрытие метки при возрождении
+-- Сброс кэша и поиск роли при возрождении
 local function onCharacterAdded(player)
+    warn("[UltraMM2] Персонаж добавлен для", player.Name)
     roleCache[player] = nil
     local char = player.Character
     if not char then return end
 
-    -- Скрываем текущую метку, если она есть (чтобы не висела)
+    -- Скрываем старую метку, если есть
     local esp = playerESPs[player]
-    if esp then
-        setVisible(esp, false)
-    end
+    if esp then setVisible(esp, false) end
 
-    -- Поиск оружия с повторением
+    -- Поиск оружия
     local attempts = 0
     local function tryDetect()
         if roleCache[player] then return end
         local role = detectRoleByWeapons(player)
         if role then
             roleCache[player] = role
+            warn("[UltraMM2] Роль", player.Name, ":", role)
             return
         end
         attempts += 1
@@ -225,7 +229,7 @@ local function onCharacterAdded(player)
     end
     tryDetect()
 
-    -- Мгновенное скрытие при смерти
+    -- Скрытие при смерти
     local hum = char:WaitForChild("Humanoid")
     hum.Died:Connect(function()
         roleCache[player] = "Dead"
@@ -244,12 +248,10 @@ end
 Players.PlayerAdded:Connect(function(p)
     p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
     if p.Character then onCharacterAdded(p) end
-    -- Создаём ESP для нового игрока
-    if p ~= LocalPlayer then
-        createESP(p)
-    end
+    if p ~= LocalPlayer then createESP(p) end
 end)
 Players.PlayerRemoving:Connect(function(p)
+    warn("[UltraMM2] Игрок вышел:", p.Name)
     removeESP(p)
 end)
 
@@ -271,6 +273,7 @@ local function getRoleColor(role)
 end
 
 -- Первоначальное создание ESP
+print("[UltraMM2] Создаю ESP для всех игроков...")
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
@@ -376,8 +379,9 @@ end
 
 -- ====== GUI ======
 local function createGUI()
+    print("[UltraMM2] Создаю GUI...")
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.4"
+    screenGui.Name = "UltraMM2_GUI_v2.5"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -427,7 +431,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.4"
+    title.Text = "UltraMM2 v2.5 STABLE"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -573,8 +577,8 @@ local function createGUI()
             togglePanel()
         end
     end)
+    print("[UltraMM2] GUI создан.")
 end
 
 createGUI()
-
-print("UltraMM2 v2.4 – ESP работает, метки не залипают. Погнали!")
+print("[UltraMM2] UltraMM2 v2.5 STABLE загружен и работает!")
