@@ -1,5 +1,5 @@
--- // UltraMM2 v2.8 FINAL by UltraAI for Ultrakotik // --
--- Тройное определение ролей + фикс режима наблюдения
+-- // UltraMM2 v2.9 FINAL by UltraAI for Ultrakotik // --
+-- Полное уничтожение остатков ESP, непрерывное сканирование ролей
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -24,7 +24,8 @@ local ESP = {
         Murderer = Color3.fromRGB(255, 0, 0),
         Sheriff = Color3.fromRGB(0, 100, 255),
         Innocent = Color3.fromRGB(0, 255, 0),
-        Dead = Color3.fromRGB(128, 128, 128)
+        Dead = Color3.fromRGB(128, 128, 128),
+        Unknown = Color3.fromRGB(128, 128, 128)
     }
 }
 
@@ -41,14 +42,12 @@ local AutoPickup = { Enabled = false, Range = 15 }
 local GodMode = { Enabled = false }
 local FastKill = { Enabled = false }
 
--- Кэш ролей (сохраняется до возрождения)
+-- Кэш ролей
 local roleCache = {}
 
 -- ==========================================
--- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ
+-- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ (тройной поиск)
 -- ==========================================
-
--- 1. Поиск StringValue в PlayerGui
 local function findRoleInGui(player)
     local gui = player:FindFirstChild("PlayerGui")
     if not gui then return nil end
@@ -73,7 +72,6 @@ local function findRoleInGui(player)
     return nil
 end
 
--- 2. Проверка атрибута Player (новый метод)
 local function findRoleByAttribute(player)
     local role = player:GetAttribute("Role")
     if role then
@@ -86,7 +84,6 @@ local function findRoleByAttribute(player)
     return nil
 end
 
--- 3. Поиск оружия в персонаже
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -109,21 +106,14 @@ local function detectRoleByWeapons(player)
     return nil
 end
 
--- Комбинированное определение с кэшированием
+-- Обновление роли с возвратом результата
 local function updatePlayerRole(player)
-    -- 1. Приоритет: PlayerGui
-    local role = findRoleInGui(player)
-    if role then roleCache[player] = role; return role end
-
-    -- 2. Атрибут
-    role = findRoleByAttribute(player)
-    if role then roleCache[player] = role; return role end
-
-    -- 3. Оружие
-    role = detectRoleByWeapons(player)
-    if role then roleCache[player] = role; return role end
-
-    -- Если ничего не найдено, но персонаж жив – пока Unknown, не форсируем Innocent
+    local role = findRoleInGui(player) or findRoleByAttribute(player) or detectRoleByWeapons(player)
+    if role then
+        roleCache[player] = role
+        return role
+    end
+    -- Не форсируем Innocent, оставляем Unknown если не нашли
     return nil
 end
 
@@ -167,6 +157,23 @@ function removeESP(player)
             if type(obj) == "table" and obj.Remove then obj:Remove() end
         end
         playerESPs[player] = nil
+    end
+end
+
+-- Полная очистка и пересоздание всех ESP (используется при выходе из наблюдения)
+local function rebuildAllESP()
+    -- Удаляем все метки
+    for player, esp in pairs(playerESPs) do
+        if esp then
+            setVisible(esp, false)
+            removeESP(player)
+        end
+    end
+    -- Создаём заново для всех, кроме себя
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            createESP(p)
+        end
     end
 end
 
@@ -270,29 +277,49 @@ function createESP(player)
 end
 
 -- ==========================================
--- ОБРАБОТЧИК ВОЗРОЖДЕНИЯ / ПОДБОРА ОРУЖИЯ
+-- ОБРАБОТЧИКИ ИГРОКОВ (непрерывное сканирование ролей)
 -- ==========================================
 local function onCharacterAdded(player)
     roleCache[player] = nil
     local char = player.Character
     if not char then return end
 
-    -- Скрываем старую метку
+    -- Скрываем старую метку (если была)
     local esp = playerESPs[player]
     if esp then setVisible(esp, false) end
 
-    -- Пытаемся определить роль сразу
+    -- Немедленная попытка определить роль
     updatePlayerRole(player)
 
-    -- Автообновление при добавлении/удалении детей (подбор оружия)
+    -- Непрерывное сканирование каждые 0.3 сек, пока роль не определится
+    local scanAttempts = 0
+    local scanConn
+    scanConn = RunService.Heartbeat:Connect(function()
+        if roleCache[player] and roleCache[player] ~= "Unknown" then
+            -- Роль уже известна, останавливаем сканирование
+            if scanConn then scanConn:Disconnect() end
+            return
+        end
+        scanAttempts += 1
+        if scanAttempts % 6 == 0 then -- каждые ~6 тиков (0.3 сек при 60 FPS)
+            updatePlayerRole(player)
+        end
+        -- Через 10 секунд, если роль так и не найдена, помечаем Unknown и прекращаем
+        if scanAttempts > 600 then -- 10 сек * 60 FPS
+            roleCache[player] = "Unknown"
+            if scanConn then scanConn:Disconnect() end
+        end
+    end)
+
+    -- Переопределение при подборе/выбросе оружия
     char.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") and not roleCache[player] then
+        if child:IsA("Tool") then
+            roleCache[player] = nil
             updatePlayerRole(player)
         end
     end)
     char.ChildRemoved:Connect(function(child)
         if child:IsA("Tool") then
-            -- Если выбросили оружие, роль может измениться (редко, но для чистоты)
             roleCache[player] = nil
             updatePlayerRole(player)
         end
@@ -309,7 +336,7 @@ local function onCharacterAdded(player)
     end)
 end
 
--- Подписки
+-- Подписки на всех игроков
 for _, p in pairs(Players:GetPlayers()) do
     p.CharacterAdded:Connect(function() onCharacterAdded(p) end)
     if p.Character then onCharacterAdded(p) end
@@ -321,13 +348,18 @@ Players.PlayerAdded:Connect(function(p)
 end)
 Players.PlayerRemoving:Connect(removeESP)
 
+-- Очистка при возрождении своего персонажа (выход из наблюдения)
+LocalPlayer.CharacterAdded:Connect(function()
+    rebuildAllESP()
+end)
+
 -- Первоначальное создание ESP
 for _, p in pairs(Players:GetPlayers()) do
     if p ~= LocalPlayer then createESP(p) end
 end
 
 -- ==========================================
--- AIMBOT (без изменений)
+-- AIMBOT
 -- ==========================================
 local fovCircle = Drawing.new("Circle")
 fovCircle.Visible = false; fovCircle.Radius = Aimbot.FOVRadius; fovCircle.Color = Color3.fromRGB(255,255,0)
@@ -430,11 +462,11 @@ if IsMM2 then
 end
 
 -- ==========================================
--- GUI (компактный, без изменений)
+-- GUI (с кнопкой Refresh Roles)
 -- ==========================================
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.8"
+    screenGui.Name = "UltraMM2_GUI_v2.9"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -457,7 +489,7 @@ local function createGUI()
     corner.Parent = icon
 
     local panel = Instance.new("Frame")
-    panel.Size = UDim2.new(0, 240, 0, 300)
+    panel.Size = UDim2.new(0, 240, 0, 330) -- немного выше для новой кнопки
     panel.AnchorPoint = Vector2.new(0.5, 0.5)
     panel.Position = UDim2.new(0.5, 0, 0.5, 0)
     panel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
@@ -484,7 +516,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.8 FINAL"
+    title.Text = "UltraMM2 v2.9 FINAL"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -516,14 +548,14 @@ local function createGUI()
     local aimTab = createTab("Aimbot", 0.5)
 
     local espPage = Instance.new("Frame")
-    espPage.Size = UDim2.new(1, -16, 0, 220)
+    espPage.Size = UDim2.new(1, -16, 0, 240)
     espPage.Position = UDim2.new(0,8,0,62)
     espPage.BackgroundColor3 = Color3.fromRGB(20,20,20)
     espPage.Visible = true
     espPage.Parent = panel
 
     local aimPage = Instance.new("Frame")
-    aimPage.Size = UDim2.new(1, -16, 0, 220)
+    aimPage.Size = UDim2.new(1, -16, 0, 240)
     aimPage.Position = UDim2.new(0,8,0,62)
     aimPage.BackgroundColor3 = Color3.fromRGB(20,20,20)
     aimPage.Visible = false
@@ -578,6 +610,31 @@ local function createGUI()
         addToggle(aimPage, "Fast Kill", function() return FastKill.Enabled end, function(v) FastKill.Enabled = v end)
     end
 
+    -- Кнопка Refresh Roles
+    local refreshBtn = Instance.new("TextButton")
+    refreshBtn.Size = UDim2.new(1, -16, 0, 26)
+    refreshBtn.Position = UDim2.new(0, 8, 0, #aimPage:GetChildren() * 26 + 10)
+    refreshBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+    refreshBtn.Text = "Refresh Roles"
+    refreshBtn.TextColor3 = Color3.new(1,1,1)
+    refreshBtn.Font = Enum.Font.SourceSansBold
+    refreshBtn.TextSize = 13
+    refreshBtn.BorderSizePixel = 0
+    refreshBtn.Parent = aimPage -- можно разместить и на ESP-странице, но логичнее здесь
+    local refreshCorner = Instance.new("UICorner")
+    refreshCorner.CornerRadius = UDim.new(0, 4)
+    refreshCorner.Parent = refreshBtn
+    refreshBtn.MouseButton1Click:Connect(function()
+        -- Сбрасываем кэш и перепроверяем роли для всех игроков
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                roleCache[p] = nil
+                updatePlayerRole(p)
+            end
+        end
+        print("[UltraMM2] Роли обновлены вручную.")
+    end)
+
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 22, 0, 22)
     closeBtn.Position = UDim2.new(1, -24, 0, 3)
@@ -605,7 +662,7 @@ local function createGUI()
             icon.Visible = false
             panel.Size = UDim2.new(0, 0, 0, 0)
             local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-            local goalSize = UDim2.new(0, 240, 0, 300)
+            local goalSize = UDim2.new(0, 240, 0, 330)
             local tween = TweenService:Create(panel, tweenInfo, {Size = goalSize})
             tween:Play()
         end
@@ -634,4 +691,4 @@ end
 
 createGUI()
 
-print("[UltraMM2] v2.8 FINAL – роли точные, наблюдение исправлено!")
+print("[UltraMM2] v2.9 FINAL – ESP без остатков, роли сканируются непрерывно!")
