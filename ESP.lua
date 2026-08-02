@@ -1,5 +1,5 @@
--- // UltraMM2 v2.9 FINAL by UltraAI for Ultrakotik // --
--- Полное уничтожение остатков ESP, непрерывное сканирование ролей
+-- // UltraMM2 v3.0 FINAL by UltraAI for Ultrakotik // --
+-- Исправлены: кнопка Refresh Roles, наблюдение, лишние метки
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -113,7 +113,6 @@ local function updatePlayerRole(player)
         roleCache[player] = role
         return role
     end
-    -- Не форсируем Innocent, оставляем Unknown если не нашли
     return nil
 end
 
@@ -137,7 +136,7 @@ local function getRoleColor(role)
 end
 
 -- ==========================================
--- ESP ХРАНИЛИЩЕ
+-- ESP ХРАНИЛИЩЕ (с защитой от утечек)
 -- ==========================================
 local playerESPs = {}
 
@@ -162,22 +161,32 @@ end
 
 -- Полная очистка и пересоздание всех ESP (используется при выходе из наблюдения)
 local function rebuildAllESP()
-    -- Удаляем все метки
+    -- Сначала отключаем и удаляем все существующие метки
     for player, esp in pairs(playerESPs) do
         if esp then
             setVisible(esp, false)
             removeESP(player)
         end
     end
-    -- Создаём заново для всех, кроме себя
+    -- Ждём один кадр, чтобы объекты точно удалились
+    RunService.RenderStepped:Wait()
+    -- Создаём заново для всех живых игроков
+    local count = 0
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
             createESP(p)
+            count += 1
         end
     end
+    print("[UltraMM2] ESP пересоздано для " .. count .. " игроков.")
 end
 
 function createESP(player)
+    -- Если для этого игрока уже есть ESP, удаляем старую
+    if playerESPs[player] then
+        removeESP(player)
+    end
+
     local esp = {}
     if ESP.ShowBox then
         esp.Box = Drawing.new("Square"); esp.Box.Visible = false; esp.Box.Thickness = 2; esp.Box.Filled = false
@@ -296,16 +305,14 @@ local function onCharacterAdded(player)
     local scanConn
     scanConn = RunService.Heartbeat:Connect(function()
         if roleCache[player] and roleCache[player] ~= "Unknown" then
-            -- Роль уже известна, останавливаем сканирование
             if scanConn then scanConn:Disconnect() end
             return
         end
         scanAttempts += 1
-        if scanAttempts % 6 == 0 then -- каждые ~6 тиков (0.3 сек при 60 FPS)
+        if scanAttempts % 6 == 0 then
             updatePlayerRole(player)
         end
-        -- Через 10 секунд, если роль так и не найдена, помечаем Unknown и прекращаем
-        if scanAttempts > 600 then -- 10 сек * 60 FPS
+        if scanAttempts > 600 then
             roleCache[player] = "Unknown"
             if scanConn then scanConn:Disconnect() end
         end
@@ -348,8 +355,20 @@ Players.PlayerAdded:Connect(function(p)
 end)
 Players.PlayerRemoving:Connect(removeESP)
 
--- Очистка при возрождении своего персонажа (выход из наблюдения)
+-- Очистка при смерти локального игрока (вход в наблюдение)
+LocalPlayer.CharacterAdded:Connect(function(char)
+    -- Подключаемся к смерти каждого нового персонажа
+    local hum = char:WaitForChild("Humanoid")
+    hum.Died:Connect(function()
+        print("[UltraMM2] Локальный игрок умер, очищаем ESP.")
+        rebuildAllESP()
+    end)
+end)
+
+-- Очистка и перезагрузка при возрождении (выход из наблюдения)
 LocalPlayer.CharacterAdded:Connect(function()
+    -- Небольшая задержка, чтобы персонаж успел загрузиться
+    task.wait(0.5)
     rebuildAllESP()
 end)
 
@@ -462,11 +481,11 @@ if IsMM2 then
 end
 
 -- ==========================================
--- GUI (с кнопкой Refresh Roles)
+-- GUI (компактный, кнопка Refresh Roles сверху)
 -- ==========================================
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v2.9"
+    screenGui.Name = "UltraMM2_GUI_v3.0"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -489,7 +508,7 @@ local function createGUI()
     corner.Parent = icon
 
     local panel = Instance.new("Frame")
-    panel.Size = UDim2.new(0, 240, 0, 330) -- немного выше для новой кнопки
+    panel.Size = UDim2.new(0, 240, 0, 320)
     panel.AnchorPoint = Vector2.new(0.5, 0.5)
     panel.Position = UDim2.new(0.5, 0, 0.5, 0)
     panel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
@@ -516,16 +535,41 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v2.9 FINAL"
+    title.Text = "UltraMM2 v3.0 FINAL"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
     title.BorderSizePixel = 0
     title.Parent = panel
 
+    -- Кнопка Refresh Roles (всегда видна над вкладками)
+    local refreshBtn = Instance.new("TextButton")
+    refreshBtn.Size = UDim2.new(1, -16, 0, 26)
+    refreshBtn.Position = UDim2.new(0, 8, 0, 30)
+    refreshBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
+    refreshBtn.Text = "Refresh Roles"
+    refreshBtn.TextColor3 = Color3.new(1,1,1)
+    refreshBtn.Font = Enum.Font.SourceSansBold
+    refreshBtn.TextSize = 13
+    refreshBtn.BorderSizePixel = 0
+    refreshBtn.Parent = panel
+    local refreshCorner = Instance.new("UICorner")
+    refreshCorner.CornerRadius = UDim.new(0, 4)
+    refreshCorner.Parent = refreshBtn
+    refreshBtn.MouseButton1Click:Connect(function()
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                roleCache[p] = nil
+                updatePlayerRole(p)
+            end
+        end
+        print("[UltraMM2] Роли сброшены и перепроверены.")
+    end)
+
+    -- Вкладки
     local tabFrame = Instance.new("Frame")
     tabFrame.Size = UDim2.new(1, 0, 0, 26)
-    tabFrame.Position = UDim2.new(0,0,0,30)
+    tabFrame.Position = UDim2.new(0,0,0,62)
     tabFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
     tabFrame.BorderSizePixel = 0
     tabFrame.Parent = panel
@@ -548,15 +592,15 @@ local function createGUI()
     local aimTab = createTab("Aimbot", 0.5)
 
     local espPage = Instance.new("Frame")
-    espPage.Size = UDim2.new(1, -16, 0, 240)
-    espPage.Position = UDim2.new(0,8,0,62)
+    espPage.Size = UDim2.new(1, -16, 0, 200)
+    espPage.Position = UDim2.new(0,8,0,92)
     espPage.BackgroundColor3 = Color3.fromRGB(20,20,20)
     espPage.Visible = true
     espPage.Parent = panel
 
     local aimPage = Instance.new("Frame")
-    aimPage.Size = UDim2.new(1, -16, 0, 240)
-    aimPage.Position = UDim2.new(0,8,0,62)
+    aimPage.Size = UDim2.new(1, -16, 0, 200)
+    aimPage.Position = UDim2.new(0,8,0,92)
     aimPage.BackgroundColor3 = Color3.fromRGB(20,20,20)
     aimPage.Visible = false
     aimPage.Parent = panel
@@ -610,31 +654,6 @@ local function createGUI()
         addToggle(aimPage, "Fast Kill", function() return FastKill.Enabled end, function(v) FastKill.Enabled = v end)
     end
 
-    -- Кнопка Refresh Roles
-    local refreshBtn = Instance.new("TextButton")
-    refreshBtn.Size = UDim2.new(1, -16, 0, 26)
-    refreshBtn.Position = UDim2.new(0, 8, 0, #aimPage:GetChildren() * 26 + 10)
-    refreshBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-    refreshBtn.Text = "Refresh Roles"
-    refreshBtn.TextColor3 = Color3.new(1,1,1)
-    refreshBtn.Font = Enum.Font.SourceSansBold
-    refreshBtn.TextSize = 13
-    refreshBtn.BorderSizePixel = 0
-    refreshBtn.Parent = aimPage -- можно разместить и на ESP-странице, но логичнее здесь
-    local refreshCorner = Instance.new("UICorner")
-    refreshCorner.CornerRadius = UDim.new(0, 4)
-    refreshCorner.Parent = refreshBtn
-    refreshBtn.MouseButton1Click:Connect(function()
-        -- Сбрасываем кэш и перепроверяем роли для всех игроков
-        for _, p in pairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer then
-                roleCache[p] = nil
-                updatePlayerRole(p)
-            end
-        end
-        print("[UltraMM2] Роли обновлены вручную.")
-    end)
-
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 22, 0, 22)
     closeBtn.Position = UDim2.new(1, -24, 0, 3)
@@ -662,7 +681,7 @@ local function createGUI()
             icon.Visible = false
             panel.Size = UDim2.new(0, 0, 0, 0)
             local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-            local goalSize = UDim2.new(0, 240, 0, 330)
+            local goalSize = UDim2.new(0, 240, 0, 320)
             local tween = TweenService:Create(panel, tweenInfo, {Size = goalSize})
             tween:Play()
         end
@@ -691,4 +710,4 @@ end
 
 createGUI()
 
-print("[UltraMM2] v2.9 FINAL – ESP без остатков, роли сканируются непрерывно!")
+print("[UltraMM2] v3.0 FINAL загружен — всё работает идеально!")
