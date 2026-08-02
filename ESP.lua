@@ -1,5 +1,5 @@
--- // UltraMM2 v3.4 FINAL by UltraAI for Ultrakotik // --
--- Исправлено: невинные не ставятся сразу, сканер ждёт 5 секунд
+-- // UltraMM2 v3.5 INSTANT by UltraAI for Ultrakotik // --
+-- Мгновенное определение всех ролей через PlayerGui.ChildAdded
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -48,7 +48,7 @@ local roleCache = {}
 -- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ
 -- ==========================================
 
--- 1. StringValue "Role" в PlayerGui (самый быстрый и точный)
+-- 1. StringValue "Role" в PlayerGui (мгновенный)
 local function findRoleInGui(player)
     local gui = player:FindFirstChild("PlayerGui")
     if not gui then return nil end
@@ -76,7 +76,7 @@ local function findRoleByAttribute(player)
     return nil
 end
 
--- 3. Поиск оружия в персонаже и Backpack
+-- 3. Поиск оружия (резерв)
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -264,60 +264,101 @@ function createESP(player)
 end
 
 -- ==========================================
--- ОПРЕДЕЛЕНИЕ РОЛИ ПРИ ВОЗРОЖДЕНИИ
+-- МГНОВЕННОЕ ОПРЕДЕЛЕНИЕ РОЛИ (новый подход)
 -- ==========================================
-local function onCharacterAdded(player)
+local function setupRoleDetection(player)
     roleCache[player] = nil
-    local char = player.Character
-    if not char then return end
 
-    local esp = playerESPs[player]
-    if esp then setVisible(esp, false) end
+    local function tryAssignRole()
+        if roleCache[player] then return true end -- уже определена
+        local role = findRoleInGui(player) or findRoleByAttribute(player) or detectRoleByWeapons(player)
+        if role then
+            roleCache[player] = role
+            return true
+        end
+        return false
+    end
 
-    -- Мгновенная проверка
-    local role = findRoleInGui(player) or findRoleByAttribute(player) or detectRoleByWeapons(player)
-    if role then
-        roleCache[player] = role
-    else
-        -- Запускаем 5-секундный сканер
-        local startTime = tick()
-        local conn
-        conn = RunService.Heartbeat:Connect(function()
-            if tick() - startTime > 5 then
-                -- 5 секунд прошло, оружия и StringValue нет → Innocent
-                if not roleCache[player] then
-                    roleCache[player] = "Innocent"
-                end
-                if conn then conn:Disconnect() end
-                return
+    -- Мгновенная попытка
+    if tryAssignRole() then return end
+
+    -- Подписываемся на PlayerGui.ChildAdded – как только появится Role, сразу узнаем
+    local gui = player:FindFirstChild("PlayerGui")
+    if gui then
+        gui.ChildAdded:Connect(function(child)
+            if roleCache[player] then return end
+            if child.Name == "Role" and child:IsA("StringValue") then
+                local role = findRoleInGui(player)
+                if role then roleCache[player] = role end
             end
-            local r = findRoleInGui(player) or findRoleByAttribute(player) or detectRoleByWeapons(player)
-            if r then
-                roleCache[player] = r
-                if conn then conn:Disconnect() end
+        end)
+    else
+        -- PlayerGui ещё не создан, ждём его
+        player.ChildAdded:Connect(function(child)
+            if child.Name == "PlayerGui" then
+                child.ChildAdded:Connect(function(grandchild)
+                    if roleCache[player] then return end
+                    if grandchild.Name == "Role" and grandchild:IsA("StringValue") then
+                        local role = findRoleInGui(player)
+                        if role then roleCache[player] = role end
+                    end
+                end)
+                -- после создания PlayerGui сразу проверяем
+                if not roleCache[player] then
+                    local role = findRoleInGui(player)
+                    if role then roleCache[player] = role end
+                end
             end
         end)
     end
 
-    -- Слушатели на появление оружия (даже после определения роли)
+    -- Резервный 5-секундный сканер для оружия / невинных
+    local startTime = tick()
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if roleCache[player] then
+            if conn then conn:Disconnect() end
+            return
+        end
+        if tick() - startTime > 5 then
+            if not roleCache[player] then
+                roleCache[player] = "Innocent"
+            end
+            if conn then conn:Disconnect() end
+            return
+        end
+        tryAssignRole()
+    end)
+
+    -- На случай появления оружия позже
     local function onToolAdded(tool)
-        if tool:IsA("Tool") then
-            -- Перепроверяем, вдруг роль изменилась
+        if tool:IsA("Tool") and not roleCache[player] then
             local r = detectRoleByWeapons(player)
             if r then roleCache[player] = r end
         end
     end
-    char.ChildAdded:Connect(onToolAdded)
+    local char = player.Character
+    if char then
+        char.ChildAdded:Connect(onToolAdded)
+    end
     local backpack = player:FindFirstChild("Backpack")
     if backpack then
         backpack.ChildAdded:Connect(onToolAdded)
-    else
-        player.ChildAdded:Connect(function(child)
-            if child.Name == "Backpack" then
-                child.ChildAdded:Connect(onToolAdded)
-            end
-        end)
     end
+    player.ChildAdded:Connect(function(child)
+        if child.Name == "Backpack" then
+            child.ChildAdded:Connect(onToolAdded)
+        end
+    end)
+end
+
+local function onCharacterAdded(player)
+    local char = player.Character
+    if not char then return end
+    local esp = playerESPs[player]
+    if esp then setVisible(esp, false) end
+
+    setupRoleDetection(player)
 
     local hum = char:WaitForChild("Humanoid")
     hum.Died:Connect(function()
@@ -355,7 +396,7 @@ for _, p in pairs(Players:GetPlayers()) do
 end
 
 -- ==========================================
--- AIMBOT, AUTO PICKUP, GOD MODE, FAST KILL, GUI (без изменений, как в v3.3)
+-- AIMBOT, AUTO PICKUP, GOD MODE, FAST KILL, GUI (как в v3.4)
 -- ==========================================
 
 local fovCircle = Drawing.new("Circle")
@@ -457,7 +498,7 @@ end
 
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v3.4"
+    screenGui.Name = "UltraMM2_GUI_v3.5"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -507,7 +548,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v3.4 FINAL"
+    title.Text = "UltraMM2 v3.5 INSTANT"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -681,4 +722,4 @@ end
 
 createGUI()
 
-print("[UltraMM2] v3.4 FINAL — невинные ждут 5 секунд, убийца/шериф мгновенно.")
+print("[UltraMM2] v3.5 INSTANT — шериф и убийца определяются по первому кадру!")
