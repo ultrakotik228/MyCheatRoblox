@@ -1,5 +1,5 @@
--- // UltraMM2 v3.6 ROCK-SOLID by UltraAI for Ultrakotik // --
--- Определение через оружие, без принудительного Innocent
+-- // UltraMM2 v3.6 FINAL by UltraAI for Ultrakotik // --
+-- Безжалостное определение всех ролей: 5-секундный сканер оружия и PlayerGui
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -48,7 +48,35 @@ local roleCache = {}
 -- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ
 -- ==========================================
 
--- Поиск оружия в персонаже и Backpack
+-- 1. StringValue "Role" в PlayerGui (мгновенный)
+local function findRoleInGui(player)
+    local gui = player:FindFirstChild("PlayerGui")
+    if not gui then return nil end
+    local roleValue = gui:FindFirstChild("Role")
+    if roleValue and roleValue:IsA("StringValue") then
+        local r = roleValue.Value:lower()
+        if r:match("murder") then return "Murderer"
+        elseif r:match("sheriff") then return "Sheriff"
+        elseif r:match("innocent") then return "Innocent"
+        end
+    end
+    return nil
+end
+
+-- 2. Атрибут Player
+local function findRoleByAttribute(player)
+    local role = player:GetAttribute("Role")
+    if role then
+        local r = tostring(role):lower()
+        if r:match("murder") then return "Murderer"
+        elseif r:match("sheriff") then return "Sheriff"
+        elseif r:match("innocent") then return "Innocent"
+        end
+    end
+    return nil
+end
+
+-- 3. Поиск оружия (персонаж + Backpack, рекурсивный)
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -236,98 +264,74 @@ function createESP(player)
 end
 
 -- ==========================================
--- ОСНОВНАЯ ЛОГИКА ОПРЕДЕЛЕНИЯ РОЛИ
+-- УЛЬТРА-СКАНЕР РОЛИ (5 секунд, каждый кадр)
 -- ==========================================
-local function setupRoleDetection(player)
-    roleCache[player] = nil
-
-    local function tryAssignRole()
-        if roleCache[player] then return true end
-        local role = detectRoleByWeapons(player)
-        if role then
-            roleCache[player] = role
-            return true
-        end
-        return false
-    end
-
-    -- Мгновенная попытка
-    if tryAssignRole() then return end
-
-    -- Агрессивный сканер каждые 0.3 секунды, пока не найдёт оружие или не умрёт
-    local scanConn
-    scanConn = RunService.Heartbeat:Connect(function()
-        if not player.Character then 
-            if scanConn then scanConn:Disconnect() end
+local function startRoleScanner(player)
+    local startTime = tick()
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if roleCache[player] then
+            if conn then conn:Disconnect() end
             return
         end
-        if tryAssignRole() then
-            if scanConn then scanConn:Disconnect() end
+        -- Пробуем все три метода
+        local role = findRoleInGui(player) or findRoleByAttribute(player) or detectRoleByWeapons(player)
+        if role then
+            roleCache[player] = role
+            if conn then conn:Disconnect() end
+            return
         end
-    end)
-
-    -- Слушатели на появление оружия (мгновенное определение)
-    local function onToolAdded(tool)
-        if tool:IsA("Tool") then
-            local r = detectRoleByWeapons(player)
-            if r then 
-                roleCache[player] = r
-                if scanConn then scanConn:Disconnect() end
+        -- 5 секунд истекли – значит, оружия нет, это невинный
+        if tick() - startTime > 5 then
+            if not roleCache[player] then
+                roleCache[player] = "Innocent"
             end
-        end
-    end
-    local function onToolRemoved(tool)
-        if tool:IsA("Tool") then
-            -- Если оружие выбросили, перепроверяем (вдруг стал невинным)
-            roleCache[player] = nil
-            if not tryAssignRole() then
-                roleCache[player] = "Innocent" -- без оружия и не мёртв -> невинный
-            end
-        end
-    end
-
-    local char = player.Character
-    if char then
-        char.ChildAdded:Connect(onToolAdded)
-        char.ChildRemoved:Connect(onToolRemoved)
-    end
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        backpack.ChildAdded:Connect(onToolAdded)
-        backpack.ChildRemoved:Connect(onToolRemoved)
-    else
-        player.ChildAdded:Connect(function(child)
-            if child.Name == "Backpack" then
-                child.ChildAdded:Connect(onToolAdded)
-                child.ChildRemoved:Connect(onToolRemoved)
-                -- как только рюкзак появился, сразу проверяем
-                if not roleCache[player] then
-                    local r = detectRoleByWeapons(player)
-                    if r then 
-                        roleCache[player] = r
-                        if scanConn then scanConn:Disconnect() end
-                    end
-                end
-            end
-        end)
-    end
-
-    -- Страховка от вечного Unknown: через 15 секунд, если оружия так и нет - Невинный
-    delay(15, function()
-        if not roleCache[player] and player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
-            roleCache[player] = "Innocent"
+            if conn then conn:Disconnect() end
         end
     end)
 end
 
 local function onCharacterAdded(player)
+    roleCache[player] = nil
     local char = player.Character
     if not char then return end
+
     local esp = playerESPs[player]
     if esp then setVisible(esp, false) end
 
-    setupRoleDetection(player)
+    -- Запускаем главный сканер
+    startRoleScanner(player)
 
+    -- Дополнительно: слушаем появление оружия и PlayerGui, чтобы ускорить определение
+    local function onToolAdded(tool)
+        if tool:IsA("Tool") and not roleCache[player] then
+            local r = detectRoleByWeapons(player)
+            if r then roleCache[player] = r end
+        end
+    end
+    if char then char.ChildAdded:Connect(onToolAdded) end
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        backpack.ChildAdded:Connect(onToolAdded)
+    else
+        player.ChildAdded:Connect(function(child)
+            if child.Name == "Backpack" then
+                child.ChildAdded:Connect(onToolAdded)
+            end
+        end)
+    end
+
+    local gui = player:FindFirstChild("PlayerGui")
+    if gui then
+        gui.ChildAdded:Connect(function(child)
+            if not roleCache[player] and child.Name == "Role" and child:IsA("StringValue") then
+                local r = findRoleInGui(player)
+                if r then roleCache[player] = r end
+            end
+        end)
+    end
+
+    -- Смерть
     local hum = char:WaitForChild("Humanoid")
     hum.Died:Connect(function()
         roleCache[player] = "Dead"
@@ -516,7 +520,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v3.6 SOLID"
+    title.Text = "UltraMM2 v3.6 FINAL"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -540,11 +544,10 @@ local function createGUI()
         for _, p in pairs(Players:GetPlayers()) do
             if p ~= LocalPlayer then
                 roleCache[p] = nil
-                local r = detectRoleByWeapons(p)
-                if r then roleCache[p] = r end
+                startRoleScanner(p)  -- запускаем сканер для всех
             end
         end
-        print("[UltraMM2] Роли обновлены.")
+        print("[UltraMM2] Роли сброшены, запущен принудительный скан.")
     end)
 
     local tabFrame = Instance.new("Frame")
@@ -690,4 +693,4 @@ end
 
 createGUI()
 
-print("[UltraMM2] v3.6 SOLID — оружие определяет всё!")
+print("[UltraMM2] v3.6 FINAL — безжалостный сканер ролей запущен!")
