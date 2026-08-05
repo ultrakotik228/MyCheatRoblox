@@ -1,5 +1,5 @@
--- // UltraMM2 v3.6 FINAL by UltraAI for Ultrakotik // --
--- Безжалостное определение всех ролей: 5-секундный сканер оружия и PlayerGui
+-- // UltraMM2 v3.7 SMART by UltraAI for Ultrakotik // --
+-- Интеллектуальный поиск ролей через все возможные объекты в PlayerGui
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -45,38 +45,57 @@ local FastKill = { Enabled = false }
 local roleCache = {}
 
 -- ==========================================
--- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ
+-- МЕТОДЫ ОПРЕДЕЛЕНИЯ РОЛИ (расширенные)
 -- ==========================================
 
--- 1. StringValue "Role" в PlayerGui (мгновенный)
-local function findRoleInGui(player)
+-- 1. Поиск всех Value-объектов в PlayerGui, содержащих ключевые слова
+local function findRoleInGuiSmart(player)
     local gui = player:FindFirstChild("PlayerGui")
     if not gui then return nil end
-    local roleValue = gui:FindFirstChild("Role")
-    if roleValue and roleValue:IsA("StringValue") then
-        local r = roleValue.Value:lower()
-        if r:match("murder") then return "Murderer"
-        elseif r:match("sheriff") then return "Sheriff"
-        elseif r:match("innocent") then return "Innocent"
+    local function search(parent)
+        for _, child in pairs(parent:GetChildren()) do
+            -- Проверяем StringValue и BoolValue
+            if (child:IsA("StringValue") or child:IsA("BoolValue")) then
+                local name = child.Name:lower()
+                local value = nil
+                if child:IsA("StringValue") then value = child.Value:lower() end
+                if child:IsA("BoolValue") and child.Value == true then value = name end
+                if name:match("murder") or (value and value:match("murder")) then return "Murderer" end
+                if name:match("sheriff") or name:match("hero") or (value and (value:match("sheriff") or value:match("hero"))) then return "Sheriff" end
+                if name:match("innocent") or (value and value:match("innocent")) then return "Innocent" end
+            end
+            local result = search(child)
+            if result then return result end
         end
+        return nil
     end
-    return nil
+    return search(gui)
 end
 
--- 2. Атрибут Player
+-- 2. Атрибуты игрока (расширенный поиск)
 local function findRoleByAttribute(player)
+    -- Перебираем все атрибуты
+    local attrs = player:GetAttributes()
+    for name, value in pairs(attrs) do
+        local n = name:lower()
+        local v = tostring(value):lower()
+        if n:match("murder") or v:match("murder") then return "Murderer" end
+        if n:match("sheriff") or n:match("hero") or v:match("sheriff") or v:match("hero") then return "Sheriff" end
+        if n:match("innocent") or v:match("innocent") then return "Innocent" end
+    end
+    -- Также проверяем стандартный атрибут "Role"
     local role = player:GetAttribute("Role")
     if role then
         local r = tostring(role):lower()
         if r:match("murder") then return "Murderer"
-        elseif r:match("sheriff") then return "Sheriff"
+        elseif r:match("sheriff") or r:match("hero") then return "Sheriff"
         elseif r:match("innocent") then return "Innocent"
         end
     end
     return nil
 end
 
--- 3. Поиск оружия (персонаж + Backpack, рекурсивный)
+-- 3. Оружие (расширенный список)
 local function findWeaponTool(obj, weaponNames)
     for _, child in pairs(obj:GetChildren()) do
         if child:IsA("Tool") then
@@ -92,16 +111,23 @@ end
 
 local function detectRoleByWeapons(player)
     local char = player.Character
+    -- Расширенный список оружия для разных версий MM2
+    local weaponList = {"Knife", "KnifeHandle", "Pistol", "Revolver", "Gun", "Handgun", "Shotgun", "Rifle"}
     if char then
-        local weapon = findWeaponTool(char, {"Knife", "KnifeHandle", "Pistol", "Revolver"})
-        if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
-        if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
+        local weapon = findWeaponTool(char, weaponList)
+        if weapon then
+            if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
+            -- Все остальные оружия – шериф (пистолеты и т.д.)
+            return "Sheriff"
+        end
     end
     local backpack = player:FindFirstChild("Backpack")
     if backpack then
-        local weapon = findWeaponTool(backpack, {"Knife", "KnifeHandle", "Pistol", "Revolver"})
-        if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
-        if weapon == "Pistol" or weapon == "Revolver" then return "Sheriff" end
+        local weapon = findWeaponTool(backpack, weaponList)
+        if weapon then
+            if weapon == "Knife" or weapon == "KnifeHandle" then return "Murderer" end
+            return "Sheriff"
+        end
     end
     return nil
 end
@@ -264,31 +290,15 @@ function createESP(player)
 end
 
 -- ==========================================
--- УЛЬТРА-СКАНЕР РОЛИ (5 секунд, каждый кадр)
+-- ОПРЕДЕЛЕНИЕ РОЛИ (с отладкой)
 -- ==========================================
-local function startRoleScanner(player)
-    local startTime = tick()
-    local conn
-    conn = RunService.Heartbeat:Connect(function()
-        if roleCache[player] then
-            if conn then conn:Disconnect() end
-            return
-        end
-        -- Пробуем все три метода
-        local role = findRoleInGui(player) or findRoleByAttribute(player) or detectRoleByWeapons(player)
-        if role then
-            roleCache[player] = role
-            if conn then conn:Disconnect() end
-            return
-        end
-        -- 5 секунд истекли – значит, оружия нет, это невинный
-        if tick() - startTime > 5 then
-            if not roleCache[player] then
-                roleCache[player] = "Innocent"
-            end
-            if conn then conn:Disconnect() end
-        end
-    end)
+local function determineRole(player)
+    local role = findRoleInGuiSmart(player) or findRoleByAttribute(player) or detectRoleByWeapons(player)
+    if role then
+        roleCache[player] = role
+        return role
+    end
+    return nil
 end
 
 local function onCharacterAdded(player)
@@ -299,14 +309,33 @@ local function onCharacterAdded(player)
     local esp = playerESPs[player]
     if esp then setVisible(esp, false) end
 
-    -- Запускаем главный сканер
-    startRoleScanner(player)
+    -- Первая попытка немедленно
+    if not determineRole(player) then
+        -- Сканируем в течение 3 секунд (ускорено)
+        local startTime = tick()
+        local conn
+        conn = RunService.Heartbeat:Connect(function()
+            if roleCache[player] then
+                if conn then conn:Disconnect() end
+                return
+            end
+            if tick() - startTime > 3 then
+                -- Если за 3 секунды не нашли, ставим Innocent
+                if not roleCache[player] then
+                    roleCache[player] = "Innocent"
+                end
+                if conn then conn:Disconnect() end
+                return
+            end
+            -- Каждый кадр пробуем
+            determineRole(player)
+        end)
+    end
 
-    -- Дополнительно: слушаем появление оружия и PlayerGui, чтобы ускорить определение
+    -- Дополнительные слушатели на оружие и PlayerGui, чтобы ускорить
     local function onToolAdded(tool)
         if tool:IsA("Tool") and not roleCache[player] then
-            local r = detectRoleByWeapons(player)
-            if r then roleCache[player] = r end
+            determineRole(player)
         end
     end
     if char then char.ChildAdded:Connect(onToolAdded) end
@@ -324,12 +353,34 @@ local function onCharacterAdded(player)
     local gui = player:FindFirstChild("PlayerGui")
     if gui then
         gui.ChildAdded:Connect(function(child)
-            if not roleCache[player] and child.Name == "Role" and child:IsA("StringValue") then
-                local r = findRoleInGui(player)
-                if r then roleCache[player] = r end
+            if not roleCache[player] then
+                determineRole(player)
             end
         end)
     end
+
+    -- Вывод отладки, если через 2 секунды роль всё ещё Unknown (один раз)
+    task.delay(2, function()
+        if roleCache[player] and roleCache[player] ~= "Unknown" then return end
+        warn("[UltraMM2] Не удалось быстро определить роль для " .. player.Name .. ". Содержимое PlayerGui:")
+        local g = player:FindFirstChild("PlayerGui")
+        if g then
+            for _, child in pairs(g:GetChildren()) do
+                warn("  " .. child.Name .. " [" .. child.ClassName .. "]")
+                if child:IsA("StringValue") or child:IsA("BoolValue") then
+                    local val = child:IsA("StringValue") and child.Value or tostring(child.Value)
+                    warn("    Значение: " .. val)
+                end
+            end
+        else
+            warn("  PlayerGui отсутствует")
+        end
+        warn("[UltraMM2] Атрибуты игрока " .. player.Name .. ":")
+        local attrs = player:GetAttributes()
+        for k, v in pairs(attrs) do
+            warn("  " .. k .. " = " .. tostring(v))
+        end
+    end)
 
     -- Смерть
     local hum = char:WaitForChild("Humanoid")
@@ -368,7 +419,7 @@ for _, p in pairs(Players:GetPlayers()) do
 end
 
 -- ==========================================
--- AIMBOT, AUTO PICKUP, GOD MODE, FAST KILL, GUI (как в v3.5)
+-- AIMBOT, AUTO PICKUP, GOD MODE, FAST KILL, GUI (без изменений)
 -- ==========================================
 
 local fovCircle = Drawing.new("Circle")
@@ -470,7 +521,7 @@ end
 
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "UltraMM2_GUI_v3.6"
+    screenGui.Name = "UltraMM2_GUI_v3.7"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -520,7 +571,7 @@ local function createGUI()
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 28)
     title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    title.Text = "UltraMM2 v3.6 FINAL"
+    title.Text = "UltraMM2 v3.7 SMART"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 16
@@ -544,10 +595,10 @@ local function createGUI()
         for _, p in pairs(Players:GetPlayers()) do
             if p ~= LocalPlayer then
                 roleCache[p] = nil
-                startRoleScanner(p)  -- запускаем сканер для всех
+                determineRole(p)
             end
         end
-        print("[UltraMM2] Роли сброшены, запущен принудительный скан.")
+        print("[UltraMM2] Роли сброшены и перепроверены.")
     end)
 
     local tabFrame = Instance.new("Frame")
@@ -693,4 +744,4 @@ end
 
 createGUI()
 
-print("[UltraMM2] v3.6 FINAL — безжалостный сканер ролей запущен!")
+print("[UltraMM2] v3.7 SMART — жду логи из консоли, если роли не определятся.")
